@@ -78,6 +78,154 @@ function loadGTM() {
 }
 
 
+// --- Store cookies bridge (sGTM / Firestore) ---
+
+// Read a first-party cookie through the Shopify Web Pixel sandbox API.
+function getCookie(name) {
+    return browser.cookie.get(name).catch(() => null);
+}
+
+function generateUUID() {
+    var d = new Date().getTime();
+    var d2 = (typeof performance !== 'undefined' && performance.now && (performance.now() * 1000)) || 0;
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+        var r = Math.random() * 16;
+        if (d > 0) {
+            r = (d + r) % 16 | 0;
+            d = Math.floor(d / 16);
+        } else {
+            r = (d2 + r) % 16 | 0;
+            d2 = Math.floor(d2 / 16);
+        }
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+}
+
+// _ga cookie format: GA1.<domainDepth>.<random>.<firstVisitTimestamp>
+// The client ID is the last two segments, e.g. "1234567890.1700000000".
+function parseGa4ClientId(gaCookie) {
+    if (!gaCookie || !gaCookie.startsWith('GA1.')) return null;
+    const segments = gaCookie.split('.');
+    if (segments.length < 4) return null;
+    return `${segments[segments.length - 2]}.${segments[segments.length - 1]}`;
+}
+
+// _ga_<gaContainerId> cookie holds the session ID in its third segment:
+//   GS1 format: GS1.1.<sessionId>.<sessionNumber>...
+//   GS2 format: GS2.1.s<sessionId>$o<n>$g<n>...
+// gaContainerId is the measurement ID minus its "G-" prefix, e.g.
+// "G-XXXXXXXXXX" -> "_ga_XXXXXXXXXX". Google's cookie docs call this
+// "container-id"; the "ga" prefix here keeps it distinct from the GTM
+// and Stape container IDs also used in this file.
+function parseGa4SessionId(sessionCookie) {
+    if (!sessionCookie) return null;
+    const segments = sessionCookie.split('.');
+    if (segments.length < 3) return null;
+    const sessionSegment = segments[2];
+    const sessionId = sessionSegment.startsWith('s') && sessionSegment.includes('$')
+        ? sessionSegment.substring(1).split('$')[0]
+        : sessionSegment;
+    return /^\d+$/.test(sessionId) ? sessionId : null;
+}
+
+// Checkout tokens sGTM has already acknowledged with a 2xx. Every checkout step
+// event retries the send, so this is what keeps the happy path down to a single
+// Firestore write: once a send succeeds the token lands here and later events
+// short-circuit. A failed send leaves the token out, so the next step retries it.
+const sentCheckoutTokens = new Set();
+
+// Tokens whose request is issued but not yet answered. Checkout steps can fire
+// in the same tick, which would otherwise slip past sentCheckoutTokens while the
+// first response is still in flight and write the same token to Firestore twice.
+const inFlightCheckoutTokens = new Set();
+
+// POST the storefront cookies to sGTM, which persists them in Firestore keyed
+// by checkout token so that webhook-replayed orders can be attributed later.
+//
+// Runs immediately, with no timer and no gtag round-trip. Every cookie read
+// here is written by the storefront GTM container long before checkout starts,
+// so waiting cannot surface a value that is not already there — it only widens
+// the window in which a page unload kills the request. `keepalive` protects a
+// request in flight; it does nothing for one that was never issued.
+async function sendStoreCookies(checkoutToken, shopifyCustomerId) {
+    // Without the join key the payload can never be matched back to an order,
+    // and sGTM keys the Firestore collection on it, so there is nowhere to put it.
+    if (!checkoutToken) {
+        console.warn('store_cookies: no checkout token, skipping.');
+        return;
+    }
+    if (sentCheckoutTokens.has(checkoutToken) || inFlightCheckoutTokens.has(checkoutToken)) return;
+    // Claim the token synchronously — the first await below yields control and
+    // would let a same-tick event through.
+    inFlightCheckoutTokens.add(checkoutToken);
+
+    const gaSessionCookieName = `_ga_${config.conversionTracking.g_id}`;
+    const [
+        gaCookie,
+        gaSessionCookie,
+        fbp,
+        fbc,
+        sepCampaign,
+        sepContent,
+        sepMedium,
+        sepSource,
+        sepSourcePlatform,
+        sepTerm
+    ] = await Promise.all([
+        getCookie('_ga'),
+        getCookie(gaSessionCookieName),
+        getCookie('_fbp'),
+        getCookie('_fbc'),
+        getCookie('gtm_dd_sep_campaign'),
+        getCookie('gtm_dd_sep_content'),
+        getCookie('gtm_dd_sep_medium'),
+        getCookie('gtm_dd_sep_source'),
+        getCookie('gtm_dd_sep_source_platform'),
+        getCookie('gtm_dd_sep_term')
+    ]);
+
+    const payload = {
+        "event": "store_cookies",
+        // Join key. Matches `checkout_token` on the orders/paid webhook payload
+        // — NOT `cart_token`, which Shopify exposes on the same order as a
+        // different value in a different format.
+        "checkout_token": checkoutToken,
+        "fbp": fbp,
+        "fbc": fbc,
+        "_ga": gaCookie,
+        [gaSessionCookieName]: gaSessionCookie,
+        "ga_client_id": parseGa4ClientId(gaCookie) || generateUUID(),
+        "ga_session_id": parseGa4SessionId(gaSessionCookie) || String(Math.floor(Date.now() / 1000)),
+        "shopify_customer_id": shopifyCustomerId,
+        "gtm_dd_sep_campaign": sepCampaign,
+        "gtm_dd_sep_content": sepContent,
+        "gtm_dd_sep_medium": sepMedium,
+        "gtm_dd_sep_source": sepSource,
+        "gtm_dd_sep_source_platform": sepSourcePlatform,
+        "gtm_dd_sep_term": sepTerm
+    };
+
+    return fetch(`${STAPE_GTM_SCRIPT_URL_BASE}/data`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload),
+        keepalive: true
+    }).then((response) => {
+        inFlightCheckoutTokens.delete(checkoutToken);
+        if (response.ok) {
+            sentCheckoutTokens.add(checkoutToken);
+        } else {
+            console.error('store_cookies rejected by sGTM:', response.status, response.statusText);
+        }
+    }).catch((error) => {
+        inFlightCheckoutTokens.delete(checkoutToken);
+        console.error('store_cookies failed to send:', error);
+    });
+}
+
+
 const processCheckoutProducts = (lineItemsInput) => {
     let finalProductArray = [];
     let ecomm_prodid_list = [];
@@ -381,251 +529,6 @@ if (typeof analytics !== 'undefined') {
     if (config.conversionTracking.trackBeginCheckout) {
         analytics.subscribe('checkout_started', (event) => {
             loadGTM();
-            setTimeout(() => { // Stape cookie sender logic - ensure full functions are here
-                function generateUUID() {
-                    var d = new Date().getTime();
-                    var d2 = (typeof performance !== 'undefined' && performance.now && (performance.now() * 1000)) || 0;
-                    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-                        var r = Math.random() * 16;
-                        if (d > 0) {
-                            r = (d + r) % 16 | 0;
-                            d = Math.floor(d / 16);
-                        } else {
-                            r = (d2 + r) % 16 | 0;
-                            d2 = Math.floor(d2 / 16);
-                        }
-                        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-                    });
-                }
-
-                function get_ga4_client_id(mid) {
-                    return new Promise((resolve) => {
-                        let clId = '';
-                        let res = false;
-                        const tryGet = () => {
-                            const cks = document.cookie.split(';').reduce((a, ck) => {
-                                const p = ck.split('=').map(s => s.trim());
-                                if (p.length === 2) a[p[0]] = p[1];
-                                return a;
-                            }, {});
-                            if (cks._ga) {
-                                const cv = cks._ga;
-                                const ps = cv.split('.');
-                                if (ps.length === 4 && ps[0] === 'GA1') return `${ps[2]}.${ps[3]}`;
-                                if (ps.length >= 3 && ps[0] === 'GA1' && ps[1].match(/^\d+$/)) return `${ps[ps.length - 2]}.${ps[ps.length - 1]}`;
-                                if (cv.length > 6 && cv.startsWith('GA1.')) {
-                                    const cp = cv.substring(cv.lastIndexOf('.', cv.lastIndexOf('.') - 1) + 1);
-                                    if (cp.includes('.')) return cp;
-                                }
-                            }
-                            return null;
-                        };
-                        const fbUUID = () => generateUUID();
-                        const resClId = (id, src) => {
-                            if (!res) {
-                                res = true; /* console.log(`客户端ID (来源: ${src}):`, id); */
-                                resolve(id);
-                            }
-                        };
-                        if (typeof gtag === 'function') {
-                            let timedOut = false;
-                            const tOut = setTimeout(() => {
-                                if (res) return;
-                                timedOut = true;
-                                clId = tryGet();
-                                if (clId) resClId(clId, "cks (tout)");
-                                else resClId(fbUUID(), "uuid (tout)");
-                            }, 1500);
-                            try {
-                                gtag('get', mid, 'client_id', (api_cid) => {
-                                    clearTimeout(tOut);
-                                    if (res || timedOut) return;
-                                    if (api_cid) resClId(api_cid, "gtag");
-                                    else {
-                                        clId = tryGet();
-                                        if (clId) resClId(clId, "cks (empty)");
-                                        else resClId(fbUUID(), "uuid (empty)");
-                                    }
-                                });
-                            } catch (e) {
-                                clearTimeout(tOut);
-                                if (res) return;
-                                console.error("gtag client_id error:", e);
-                                clId = tryGet();
-                                if (clId) resClId(clId, "cks (err)");
-                                else resClId(fbUUID(), "uuid (err)");
-                            }
-                        } else {
-                            clId = tryGet();
-                            if (clId) resClId(clId, "cks (no gtag)");
-                            else resClId(fbUUID(), "uuid (no gtag)");
-                        }
-                    });
-                }
-
-                function get_ga4_session_id(mid) {
-                    return new Promise((resolve) => {
-                        let sessId = '';
-                        let res = false;
-                        const tryGetSess = () => {
-                            const cks = document.cookie.split(';').reduce((a, ck) => {
-                                const p = ck.split('=').map(s => s.trim());
-                                if (p.length === 2) a[p[0]] = p[1];
-                                return a;
-                            }, {});
-                            const mSuffix = mid.startsWith('G-') ? mid.substring(2) : mid;
-                            if (!mSuffix) return null;
-                            const ckKey = '_ga_' + mSuffix.replace(/-/g, '_');
-                            const g4cv = cks[ckKey] || cks['_ga_' + mSuffix];
-                            if (g4cv) {
-                                const ps = g4cv.split('.');
-                                if (ps.length >= 3) {
-                                    let sPart = ps[2];
-                                    if (sPart.startsWith('s') && sPart.includes('$')) {
-                                        const sTs = sPart.substring(1).split('$')[0];
-                                        if (/^\d+$/.test(sTs)) return sTs;
-                                    } else if (/^\d+$/.test(sPart)) return sPart;
-                                }
-                            }
-                            return null;
-                        };
-                        const fbTs = () => Math.floor(Date.now() / 1000).toString();
-                        const resSessId = (id, src) => {
-                            if (!res) {
-                                res = true; /* console.log(`会话ID (来源: ${src}):`, String(id)); */
-                                resolve(String(id));
-                            }
-                        };
-                        if (typeof gtag === 'function') {
-                            let timedOut = false;
-                            const tOut = setTimeout(() => {
-                                if (res) return;
-                                timedOut = true;
-                                sessId = tryGetSess();
-                                if (sessId) resSessId(sessId, "cks (tout)");
-                                else resSessId(fbTs(), "ts (tout)");
-                            }, 1500);
-                            try {
-                                gtag('get', mid, 'session_id', (api_sid) => {
-                                    clearTimeout(tOut);
-                                    if (res || timedOut) return;
-                                    if (api_sid) resSessId(api_sid, "gtag");
-                                    else {
-                                        sessId = tryGetSess();
-                                        if (sessId) resSessId(sessId, "cks (empty)");
-                                        else resSessId(fbTs(), "ts (empty)");
-                                    }
-                                });
-                            } catch (e) {
-                                clearTimeout(tOut);
-                                if (res) return;
-                                console.error("gtag session_id error:", e);
-                                sessId = tryGetSess();
-                                if (sessId) resSessId(sessId, "cks (err)");
-                                else resSessId(fbTs(), "ts (err)");
-                            }
-                        } else {
-                            sessId = tryGetSess();
-                            if (sessId) resSessId(sessId, "cks (no gtag)");
-                            else resSessId(fbTs(), "ts (no gtag)");
-                        }
-                    });
-                }
-
-                /***************************************************/
-                /************* MODIFICATION START ******************/
-                /***************************************************/
-                async function getCookiesPayloadInternal() {
-                    try {
-                        const [
-                            clientId,
-                            sessionId,
-                            fbp,
-                            fbc,
-                            gaCookie,
-                            gaGidCookie,
-                            sep_campaign,
-                            sep_content,
-                            sep_medium,
-                            sep_source,
-                            sep_source_platform,
-                            sep_term
-                        ] = await Promise.all([
-                            get_ga4_client_id(config.conversionTracking.measurement_id),
-                            get_ga4_session_id(config.conversionTracking.measurement_id),
-                            browser.cookie.get('_fbp').catch(() => null),
-                            browser.cookie.get('_fbc').catch(() => null),
-                            browser.cookie.get('_ga').catch(() => null),
-                            browser.cookie.get(`_ga_${config.conversionTracking.g_id}`).catch(() => null),
-                            // New cookies from your image
-                            browser.cookie.get('gtm_dd_sep_campaign').catch(() => null),
-                            browser.cookie.get('gtm_dd_sep_content').catch(() => null),
-                            browser.cookie.get('gtm_dd_sep_medium').catch(() => null),
-                            browser.cookie.get('gtm_dd_sep_source').catch(() => null),
-                            browser.cookie.get('gtm_dd_sep_source_platform').catch(() => null), // Assuming full name for 'gtm_dd_sep_source_pl...'
-                            browser.cookie.get('gtm_dd_sep_term').catch(() => null)
-                        ]);
-
-                        const shopifyCustomerIdFromEvent = event.data?.checkout?.customer?.id || null;
-
-                        const payload = {
-                            "event": "store_cookies",
-                            "cart_token": event.data.checkout.token,
-                            "fbp": fbp,
-                            "fbc": fbc,
-                            "_ga": gaCookie,
-                            [`_ga_${config.conversionTracking.g_id}`]: gaGidCookie,
-                            "ga_client_id": clientId,
-                            "ga_session_id": sessionId,
-                            "shopify_customer_id": shopifyCustomerIdFromEvent,
-                            // Adding the new parameters to the payload
-                            "gtm_dd_sep_campaign": sep_campaign,
-                            "gtm_dd_sep_content": sep_content,
-                            "gtm_dd_sep_medium": sep_medium,
-                            "gtm_dd_sep_source": sep_source,
-                            "gtm_dd_sep_source_platform": sep_source_platform,
-                            "gtm_dd_sep_term": sep_term
-                        };
-                        return payload;
-                    } catch (error) {
-                        console.error('Error in getCookiesPayloadInternal:', error);
-                        return {
-                            error: "Failed to get cookies payload",
-                            details: error.message || String(error)
-                        };
-                    }
-                }
-                /***************************************************/
-                /************** MODIFICATION END *******************/
-                /***************************************************/
-
-                async function sendCookiesToSgtmInternal() {
-                    const payload = await getCookiesPayloadInternal();
-                    if (payload && !payload.error) {
-                        fetch(`${STAPE_GTM_SCRIPT_URL_BASE}/data`, {
-                            method: "POST",
-                            headers: {
-                                "Content-Type": "application/json"
-                            },
-                            body: JSON.stringify(payload),
-                            keepalive: true
-                        }).then(response => {
-                            if (!response.ok) {
-                                console.error('Error sending payload: Server responded with status', response.status, response.statusText);
-                                return response.text().then(text => {
-                                    throw new Error(text || response.statusText)
-                                });
-                            }
-                            return response.json().catch(() => ({}));
-                        }).catch(error => {
-                            console.error('Error sending payload to Stape:', error);
-                        });
-                    } else if (payload && payload.error) {
-                        console.error("Not sending payload due to previous error:", payload);
-                    }
-                }
-                sendCookiesToSgtmInternal();
-            }, 500);
 
             const eventContextData = event.context?.document;
             const checkout = event.data?.checkout; // Use checkout object directly for this event
@@ -633,6 +536,7 @@ if (typeof analytics !== 'undefined') {
                 console.warn("Begin Checkout: No checkout data found.");
                 return;
             }
+            sendStoreCookies(checkout.token, checkout.customer?.id || null);
 
             const processedData = processCheckoutProducts(checkout.lineItems);
             const orderLevelCoupons = getOrderLevelCoupons(checkout.discountApplications);
@@ -653,6 +557,29 @@ if (typeof analytics !== 'undefined') {
             });
         });
     }
+
+    /* *************** STORE COOKIES RETRY *************** */
+    // checkout_started is a single shot: if its request never leaves the page,
+    // the order can never be attributed. Every later checkout step carries the
+    // same checkout.token, so re-running the send there costs one short-circuit
+    // on the happy path and buys a retry when the first attempt was lost.
+    //
+    // Deliberately not gated behind the track* flags — this feeds order
+    // attribution, not GA4 reporting, and must survive those being turned off.
+    [
+        'checkout_contact_info_submitted',
+        'checkout_address_info_submitted',
+        'checkout_shipping_info_submitted',
+        'payment_info_submitted',
+        'checkout_completed'
+    ].forEach((eventName) => {
+        analytics.subscribe(eventName, (event) => {
+            const checkout = event.data?.checkout;
+            if (checkout?.token) {
+                sendStoreCookies(checkout.token, checkout.customer?.id || null);
+            }
+        });
+    });
 
     if (config.conversionTracking.trackAddShippingInfo) {
         analytics.subscribe('checkout_shipping_info_submitted', (event) => {
