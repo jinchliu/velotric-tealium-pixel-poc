@@ -681,7 +681,10 @@ if (typeof analytics !== 'undefined') {
 
             const dataLayerObj = {
                 event: 'cus_purchase',
-                cart_token: checkoutDataSource.token,
+                // Same value the store_cookies bridge sends: Shopify's checkout
+                // token, which is what the orders webhook joins on. Not the
+                // order's own `token`, and not `cart_token`.
+                checkout_token: checkoutDataSource.token,
                 page_location: eventContextData?.location?.href,
                 page_referrer: eventContextData?.referrer,
                 page_title: eventContextData?.title,

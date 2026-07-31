@@ -264,7 +264,7 @@ GA4 `ecommerce.items[]` 有三种构造方式,下方各事件会引用:
 
 | 参数 | 来源 |
 | --- | --- |
-| `cart_token` | `checkout.token` |
+| `checkout_token` | `checkout.token`(即订单 webhook 的 `checkout_token`,非 `cart_token`) |
 | `ecomm_prodid` | 各行 prodid 逗号拼接 |
 | `user_email` | `checkout.email` |
 | `user_data.address.*` | `first_name` / `last_name` / `street` / `city` / `region` / `postal_code` / `country`,优先配送地址,回退账单地址 |
