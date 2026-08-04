@@ -123,6 +123,29 @@ Web Pixel 跑在沙箱 iframe 里,事件通过 `window.parent.postMessage` 镜�
 - `message` 监听器接收 Pixel 镜像过来的事件并推入 `dataLayer`;每次推送后追加 `{ ecommerce: null }`,与 Pixel 端一致,避免连续事件的 ecommerce 数据互相污染。
 - GTM 容器的 `j.src` 域名与末尾 query 参数,应与 [shopify/web-pixel.js](shopify/web-pixel.js) 中 `STAPE_GTM_SCRIPT_URL_BASE` / `STAPE_GTM_LOADER_PREFIX` / `STAPE_GTM_CONTAINER_ID` / `STAPE_GTM_BASE_QUERY_PARAMS` 指向同一个 Stape 容器。
 
+### 3. 容器会加载两个脚本,不是重复加载
+
+装好之后,Stape 域名上会出现**两个不同的脚本请求**。这是 GTM + GA4 的固有模式,不是配置错误:
+
+| 请求 | 是什么 | 职责 |
+| --- | --- | --- |
+| `/<prefix><containerId>.js?<queryParams>` | GTM 容器(Stape custom loader) | 标签管理运行时,承载 tag / trigger / variable 配置并决定何时触发。**自身不测量、不写 cookie、不发数据** |
+| `/<containerId>/<proxyPath>?<param>=<base64>` | gtag.js | GA4 衡量库,写 `_ga` / `_ga_<gaContainerId>` cookie、维护会话、组装并发送命中 |
+
+第二个请求的 base64 参数解开后就是 `/gtag/js?id=G-XXXXXXXXXX`。在 DevTools 的 **Initiator** 列可以直接看到它由第一个脚本发起。
+
+两者职责不同,Google 的官方定义([Google Tag Manager vs. gtag.js](https://support.google.com/tagmanager/answer/7582054)):
+
+> gtag.js is a JavaScript **tagging framework** that allows you to **send data** from your site to Google measurement products.
+>
+> Google Tag Manager is a **tag management system** that allows you to **set up and manage tags** on your site without changing your website's code.
+
+所以 GTM 不替代 gtag.js,而是包在它外面;用 GTM 部署 GA4 必然产生两个请求。标准(不走代理)的站点上这两个请求是 `googletagmanager.com/gtm.js?id=GTM-XXXXXXX` 和 `googletagmanager.com/gtag/js?id=G-XXXXXXXXXX`,一眼可辨。这里两者都被 Stape 代理到自有域名(为绕过 ITP),且第二个的目标 URL 被 base64 编码进 query 参数,所以外观高度相似,容易误判成同一个脚本加载了两次。
+
+> 注:官方文档没有一处明写「用 GTM 时会额外请求 gtag.js」。最接近的是 [CSP 指南](https://developers.google.com/tag-platform/security/guides/csp) 中的 "Tag Manager will propagate the nonce to any scripts that **it adds to the page**",以及它给出的主机级白名单 `https://www.googletagmanager.com`(同时覆盖 `/gtm.js` 与 `/gtag/js`)。最后一环以 DevTools 的 Initiator 列为实证。
+
+两个脚本的响应头均为 `Cache-Control: private, max-age=900`,缓存 15 分钟。排查时若勾了 DevTools 的 **Disable cache**,每次刷新都会重新下载,看起来像每次都在重复加载。
+
 ## store_cookies 桥接 (Cookie Bridge)
 
 结账页把店面写下的第一方 cookie POST 到 Stape 的 `/data` 端点,sGTM 以 checkout token 为键存入 Firestore。前端 purchase 事件丢失时,订单 webhook 可以凭 `checkout_token` 回查这份记录补齐归因。
