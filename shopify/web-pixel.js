@@ -122,9 +122,10 @@ function parseGa4SessionId(sessionCookie) {
     const segments = sessionCookie.split('.');
     if (segments.length < 3) return null;
     const sessionSegment = segments[2];
-    const sessionId = sessionSegment.startsWith('s') && sessionSegment.includes('$')
-        ? sessionSegment.substring(1).split('$')[0]
-        : sessionSegment;
+    let sessionId = sessionSegment;
+    if (sessionSegment.startsWith('s') && sessionSegment.includes('$')) {
+        sessionId = sessionSegment.substring(1).split('$')[0];
+    }
     return /^\d+$/.test(sessionId) ? sessionId : null;
 }
 
