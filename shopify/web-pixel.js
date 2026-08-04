@@ -187,10 +187,13 @@ async function sendStoreCookies(checkoutToken, shopifyCustomerId) {
 
     const payload = {
         "event": "store_cookies",
-        // Join key. Matches `checkout_token` on the orders/paid webhook payload
-        // — NOT `cart_token`, which Shopify exposes on the same order as a
-        // different value in a different format.
-        "checkout_token": checkoutToken,
+        // Join key. The NAME is `cart_token` because the deployed sGTM container
+        // reads that field and cannot be changed; the name is frozen, the value
+        // is not. The VALUE is Shopify's checkout token, which the orders/paid
+        // webhook exposes as `checkout_token`. sGTM must keep querying on the
+        // webhook's `checkout_token` — the webhook's own `cart_token` is a
+        // different value in a different format and joins at 0%.
+        "cart_token": checkoutToken,
         "fbp": fbp,
         "fbc": fbc,
         "_ga": gaCookie,
@@ -682,10 +685,10 @@ if (typeof analytics !== 'undefined') {
 
             const dataLayerObj = {
                 event: 'cus_purchase',
-                // Same value the store_cookies bridge sends: Shopify's checkout
-                // token, which is what the orders webhook joins on. Not the
-                // order's own `token`, and not `cart_token`.
-                checkout_token: checkoutDataSource.token,
+                // Same value and same legacy field name as the store_cookies
+                // bridge: Shopify's checkout token, which the orders webhook
+                // exposes as `checkout_token`. Not the order's own `token`.
+                cart_token: checkoutDataSource.token,
                 page_location: eventContextData?.location?.href,
                 page_referrer: eventContextData?.referrer,
                 page_title: eventContextData?.title,
