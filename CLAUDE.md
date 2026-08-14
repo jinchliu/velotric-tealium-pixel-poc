@@ -11,8 +11,8 @@ of the hard parts live at their seams.
 > inline.
 
 Architecture and the recovery path explain what exists; the join contract,
-Firestore layout and dedup are the three contracts you can break; the rest is
-operational.
+Firestore layout, dedup and the Merchant Center item ID are the four contracts
+you can break; the rest is operational.
 
 ## Architecture
 
@@ -104,6 +104,40 @@ GA4 — add `transaction_source` as a secondary dimension:
 | `GA4 Tag` (client-side pass-through) | `ga_server_side` | real page URL |
 | `Webhook Purchase GA4` (backfill) | `shopify_webhook` | hardcoded `/thank_you` |
 
+## The Merchant Center item ID
+
+GA4 `item_id` must be byte-identical to the product's `id` in the Google
+Merchant Center feed, or nothing in Google Ads joins item-level data back to a
+product. Shopify's Google & YouTube app writes that id as
+`shopify_<country>_<productId>_<variantId>`, **one row per variant**.
+
+So `items[]` carries the variant-level id and `product.id` moves to
+`item_group_id`, which is GMC's name for the product-level grouping.
+`item_group_id` is *not* a standard GA4 item parameter — it arrives as a custom
+item-scoped one and has to be registered in GA4 before it appears in reports.
+
+**The country segment is not observable from the pixel.** Its ground truth is
+the feed, which the sandbox cannot read, so `resolveGmcCountry()` infers it from
+`init.data.shop.countryCode` and falls back to `config.store.gmcCountryFallback`.
+Two things that inference cannot get right — both of which make the resolved
+value disagree with the fallback, which is what the warning is for:
+
+- `shop.countryCode` is the shop's **own** country. It follows the store address
+  in Settings, which Shopify requires to match the business entity's country, so
+  a brand selling abroad resolves to where it is registered rather than where it
+  sells.
+- Shopify's Google & YouTube app emits a market-agnostic **`ZZ`** segment for
+  stores migrated to the Merchant API, and no Shopify field will ever return
+  `ZZ`. Creating new products or uninstalling and reinstalling that app triggers
+  the migration; Content API for Shopping sunset 2026-08-18. Tell clients not to
+  reinstall the app.
+
+> **Verify against a feed export, never against the docs.** Ask the client for a
+> csv of `item_id` from Merchant Center and compare the prefix.
+
+Changing `item_id` breaks GA4 item reporting continuity — the same product
+appears under both the old and the new id, with no retroactive mapping.
+
 ## Per-store builds
 
 **Routing.** One GA4 property per storefront, resolved by a Lookup Table
@@ -117,8 +151,10 @@ variable in each container:
 > **The two tables key on different inputs on purpose — do not "align" them.**
 
 **Building a store's file.** Copy `shopify/web-pixel.js`, swap `measurement_id`
-and `store.country`, then minify. `g_id` and the `_ga_<id>` cookie name derive
-from `measurement_id` automatically — do not edit them separately.
+and `gmcCountryFallback`, then minify. `g_id` and the `_ga_<id>` cookie name
+derive from `measurement_id` automatically — do not edit them separately, and
+note that `gmcCountryFallback` only takes effect when `init` reports no shop
+country.
 
 > **Minify with plain `terser <src> -o <out>` and no flags.** `-m` renames
 > `eventData` to `e`, which collides with the `catch (e)` in
@@ -127,7 +163,9 @@ from `measurement_id` automatically — do not edit them separately.
 > safer.
 
 Outputs are gitignored — they are build artefacts delivered to the client, not
-source.
+source. Check one with `node --check`, and count occurrences with
+`grep -o … | wc -l` rather than `grep -c`: the artefact is a single line, so
+`grep -c` reports 1 for everything.
 
 ## Failure modes that never raise an error
 
@@ -149,6 +187,10 @@ them first.
 - **Wrong webhook topic.** A store subscribed to `carts/create` instead of
   `orders/paid` makes the backfill forward cart creations, which sGTM reports as
   0.00 purchases keyed by cart token. Nothing in either system checks the topic.
+
+- **Wrong Merchant Center country segment.** `shopify_US_…` against a feed that
+  says `shopify_CA_…` is a well-formed id that joins nothing. See
+  [The Merchant Center item ID](#the-merchant-center-item-id).
 
 - **Unvalidated postMessage.** `theme-liquid.html` pushes any message with an
   `event` property into `dataLayer` with no `origin` or `source` check, so any
@@ -196,9 +238,10 @@ them first.
 - **`loadGTM()` has no idempotence guard.** It runs on both `checkout_started`
   and `checkout_completed`; double injection on a single-page checkout is
   unverified.
-- **`shopify/web-pixel.js` still carries one client's `config` values** as its
-  committed defaults. Anything that hardcodes a client belongs in a per-store
-  build, not in the template.
+- **`shopify/web-pixel.js` carries one client's `config` values** as its
+  committed defaults. `main` holds eco-worthy US; a client branch retargets them
+  for that client and must not be merged back. Read `config` before building
+  anything — which values you get depends on the branch you are standing on.
 
 ---
 
@@ -242,8 +285,11 @@ FR/ES/IT/JP/AU stores exist but are deliberately out of scope; they are absent
 from both Lookup Tables, so they fall through to the US property server-side and
 to nothing client-side.
 
-`shopify/web-pixel.js` is committed with the US values (`GTM-NZ3GPW`,
-`G-66S3XN5ND0`, `country: 'US'`); the other stores are built from it.
+`shopify/web-pixel.js` on `main` is committed with the US values (`GTM-NZ3GPW`,
+`G-66S3XN5ND0`, `gmcCountryFallback: 'US'`); the other stores are built from it.
+What was `store.country` is now `gmcCountryFallback`, and the segment is
+resolved at runtime — see [The Merchant Center item
+ID](#the-merchant-center-item-id).
 
 #### GTM object IDs
 
@@ -265,5 +311,86 @@ The generic sections describe these by name; here are the API IDs to open.
   every one as a €0.00 purchase keyed by cart token.
 - **`(not set)` transaction ids.** ~3.8% of US purchases, likely double-counted.
 - **`checkout.token` on `checkout_completed`** looked null across 21 samples.
-- **UK builds use `GB`** for `store.country` (ISO 3166-1 alpha-2). Not checked
-  against the actual Google Merchant Center product ID prefix.
+- **UK builds use `GB`** for what is now `gmcCountryFallback` (ISO 3166-1
+  alpha-2). Never checked against the actual Merchant Center prefix, and the
+  fallback is now reached only when `init` reports no shop country — so the
+  operative value for these stores is whatever `shop.countryCode` returns, which
+  has never been observed on any eco-worthy storefront.
+
+### SPEEDIANCE
+
+The full stack is deployed for this client — pixel, GTM web, sGTM, backfill and
+Firestore — so everything above applies unchanged. The pixel was retargeted in
+`3e3f3b2` and the Merchant Center item ID fixed in `3653b29`.
+
+Verified on the production storefront 2026-08-14 with no problems found.
+**Not live** — whether to ship was still the client's open decision.
+
+#### Identifiers
+
+| Placeholder | Value |
+| --- | --- |
+| `<gtm-web-container-id>` | `GTM-5G84T5XX` |
+| `<gtm-server-container-id>` | `GTM-N9LNC9LQ` |
+| `<stape-container-identifier>` | `jlwuusem` |
+| `<container-loading-path>` | `https://load.securedata.ca.speediance.com` |
+| `<tagging-server-url>` | not recorded — by eco-worthy's pattern it would be `https://securedata.ca.speediance.com`, unverified |
+| `<gcp-project>` | not recorded |
+
+Loader script `3g83jlwuusem.js` — prefix `3g83`, base query params
+`bwbti=BAFOMiE6QV8qXUchQC80TBtYQVtEUQgEUBYDEBATBQsDBhZbFhgB`. Both are
+per-container values, from Stape's custom loader and the Stape Shopify app
+respectively; neither derives from the container identifier, so both have to be
+copied out of those UIs. `theme-liquid.html` hardcodes the same URL that the
+pixel assembles from its constants — change them together.
+
+Numeric account/container IDs have not been looked up; only the `GTM-` public
+IDs are known.
+
+#### Stores
+
+| Store | Hostname | Shop domain | Measurement ID |
+| --- | --- | --- | --- |
+| CA | `ca.speediance.com` — inferred from the Stape domain, unverified | not recorded | `G-NT7ETBJR94` |
+| test | `speediance-fs-test.myshopify.com` | same | `G-NT7ETBJR94` |
+
+The test store shares the CA measurement ID, runs on Shopify demo data (USD,
+"Hydrogen Vendor" products) and its `shop.countryCode` returns **`US`** — which
+is what established that the field reports the shop's own country rather than
+the market it sells to. A test hit from it therefore carries `shopify_US_…` ids
+by design, not as a bug.
+
+The `speediance` branch retargets `shopify/web-pixel.js` at the CA values and is
+deliberately not merged to `main`, which keeps eco-worthy's. The delivered
+artefact is `speediance/web-pixel.ca.min.js` (gitignored).
+
+#### Merchant Center
+
+A feed export dated 2026-08-13 confirmed `shopify_CA_<productId>_<variantId>`,
+e.g. `shopify_CA_9245431103746_48093899096322`. Product `9245431103746` appears
+twice under two variant ids — the direct evidence that the feed is variant-level
+and that a product-level `item_id` cannot line up. Not yet migrated to the `ZZ`
+format; recheck after the 2026-08-18 Content API sunset.
+
+#### Open for this client
+
+- **sGTM Lookup Table not configured.** The speediance shop domain is absent
+  from the server container's table, so events fall through to its default
+  measurement ID.
+- **Webhook topic unconfirmed.** Nothing in either system checks it, and one
+  eco-worthy store was subscribed to `carts/create` for months — confirm this
+  client is on `orders/paid` before trusting any backfilled purchase.
+- **The recovery path has not been exercised here.** No Firestore document,
+  join or dedup key from this client has been inspected; the browser side is
+  what was verified on 2026-08-14.
+- **`ep.ecomm_proid`** — the GA4 payload spells it without the `d`. The pixel
+  sends `ecomm_prodid`, so the name is introduced in GTM. Check what the Google
+  Ads remarketing tag actually reads.
+- **`cus_view_item_list` sends no `ecomm_prodid`** while the other eight
+  ecommerce events do, so collection impressions may never reach remarketing
+  audiences.
+- **`ep.cus_hit_timestamp` begins with `undefined`** — a GTM-side variable that
+  does not resolve.
+- **No `item_variant` in the observed payload.** The pixel sends
+  `sku || title`; unconfirmed whether the demo products have neither or the tag
+  does not map it.
