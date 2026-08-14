@@ -23,7 +23,11 @@ const config = {
     },
     /* *************** STORE SETTINGS *************** */
     store: {
-        country: 'US', // used to build Google Merchant Center product IDs: shopify_<country>_<productId>_<variantId>
+        // Fallback for the country segment of the Google Merchant Center
+        // product ID (shopify_<country>_<productId>_<variantId>), used when
+        // init reports no shop country — see resolveGmcCountry(). Copy it from
+        // a real ID in the live GMC feed.
+        gmcCountryFallback: 'US',
         affiliationName: typeof init !== 'undefined' && init.data && init.data.shop ? init.data.shop.name : 'Unknown Store',
     },
 };
@@ -56,9 +60,34 @@ function pushEventToDataLayer(eventData) {
     }
 }
 
-// Build a Google Merchant Center product ID (shopify_<country>_<productId>_<variantId>)
+// Resolve the country segment of the Google Merchant Center product ID from
+// the shop's own country, falling back to the configured value.
+//
+// shop.countryCode follows the store address in Settings, which Shopify
+// requires to match the business entity's country, so a brand selling abroad
+// can resolve to where it is registered rather than where it sells. The
+// warning is what surfaces that.
+function resolveGmcCountry() {
+    const shop = typeof init !== 'undefined' ? init.data?.shop : null;
+    const fallback = config.store.gmcCountryFallback;
+    const resolved = shop?.countryCode || fallback;
+    if (resolved !== fallback) {
+        console.warn(`gmcCountry: resolved "${resolved}" but fallback is "${fallback}". Verify against a real item ID in the GMC feed.`);
+    }
+    return resolved;
+}
+
+// Resolved once at pixel init — the shop's country does not change between
+// events on a page.
+const GMC_COUNTRY = resolveGmcCountry();
+
+// Build a Google Merchant Center product ID
+// (shopify_<country>_<productId>_<variantId>). GMC lists one row per variant,
+// so both IDs are required; callers pass optional-chained values and rely on
+// the undefined return to skip the item.
 function buildEcommProdId(productId, variantId) {
-    return `shopify_${config.store.country}_${productId}_${variantId}`;
+    if (!productId || !variantId) return undefined;
+    return `shopify_${GMC_COUNTRY}_${productId}_${variantId}`;
 }
 
 const initContextData = typeof init !== 'undefined' ? init.context?.document : null;
@@ -259,8 +288,11 @@ const processCheckoutProducts = (lineItemsInput) => {
             });
         }
 
+        const ecommProdId = buildEcommProdId(product?.id, variant?.id);
+
         let lineItemData = {
-            item_id: product?.id,
+            item_id: ecommProdId,
+            item_group_id: product?.id,
             item_name: product?.title,
             affiliation: config.store.affiliationName,
             coupon: Array.from(currentItemCoupons).join(',') || undefined,
@@ -273,8 +305,8 @@ const processCheckoutProducts = (lineItemsInput) => {
             quantity: quantity,
         };
         finalProductArray.push(lineItemData);
-        if (product?.id && variant?.id) {
-            ecomm_prodid_list.push(buildEcommProdId(product.id, variant.id));
+        if (ecommProdId) {
+            ecomm_prodid_list.push(ecommProdId);
         }
     });
     return {
@@ -387,8 +419,10 @@ if (typeof analytics !== 'undefined') {
             const eventContextData = event.context?.document;
             const collection = event.data?.collection;
             if (!collection) return;
+            // `item` is a ProductVariant, so its own id is the variant id.
             const googleAnalyticsProducts = (collection.productVariants || []).map((item, index) => ({
-                item_id: item.product?.id,
+                item_id: buildEcommProdId(item.product?.id, item.id),
+                item_group_id: item.product?.id,
                 item_name: item.product?.title,
                 affiliation: config.store.affiliationName,
                 index: index + 1,
@@ -418,7 +452,8 @@ if (typeof analytics !== 'undefined') {
             const productVariant = event.data?.productVariant;
             if (!productVariant) return;
             const googleAnalyticsProducts = [{
-                item_id: productVariant.product?.id,
+                item_id: buildEcommProdId(productVariant.product?.id, productVariant.id),
+                item_group_id: productVariant.product?.id,
                 item_name: productVariant.product?.title,
                 affiliation: config.store.affiliationName,
                 item_brand: productVariant.product?.vendor,
@@ -450,7 +485,8 @@ if (typeof analytics !== 'undefined') {
             const itemPrice = parseFloat(merchandise.price?.amount || 0);
             const quantityAdded = parseInt(cartLine.quantity || 1, 10);
             const googleAnalyticsProducts = [{
-                item_id: merchandise.product?.id,
+                item_id: buildEcommProdId(merchandise.product?.id, merchandise.id),
+                item_group_id: merchandise.product?.id,
                 item_name: merchandise.product?.title,
                 affiliation: config.store.affiliationName,
                 item_brand: merchandise.product?.vendor,
@@ -504,7 +540,8 @@ if (typeof analytics !== 'undefined') {
             const itemPrice = parseFloat(merchandise.price?.amount || 0);
             const quantityRemoved = parseInt(cartLine.quantity || 0, 10);
             const googleAnalyticsProducts = [{
-                item_id: merchandise.product?.id,
+                item_id: buildEcommProdId(merchandise.product?.id, merchandise.id),
+                item_group_id: merchandise.product?.id,
                 item_name: merchandise.product?.title,
                 affiliation: config.store.affiliationName,
                 item_brand: merchandise.product?.vendor,
