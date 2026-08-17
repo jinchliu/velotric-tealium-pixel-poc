@@ -1,12 +1,10 @@
-// Step 1. Initialize the JavaScript pixel SDK (make sure to exclude HTML)
-
-// Ensure 'init' and 'analytics' are available in this scope (provided by Shopify Pixel SDK)
+/*==============================================================================
+  Settings
+==============================================================================*/
 const config = {
-    /* *************** CONVERSION TRACKING SETTINGS *************** */
     conversionTracking: {
-        gtmContainerId: 'GTM-NZ3GPW', // web GTM
-        measurement_id: 'G-66S3XN5ND0', // GA4 measurement ID
-        get g_id() { return this.measurement_id.replace(/^G-/, ''); },
+        // Test property, used while developing. Production is G-5LSR0MTS2B
+        measurementId: 'G-4FLMVWWG56', // GA4 measurement ID
         trackPageViews: true,
         trackClicks: true,
         trackSearch: true,
@@ -21,7 +19,6 @@ const config = {
         trackAddPaymentInfo: true,
         trackPurchase: true,
     },
-    /* *************** STORE SETTINGS *************** */
     store: {
         // Fallback for the country segment of the Google Merchant Center
         // product ID (shopify_<country>_<productId>_<variantId>), used when
@@ -32,17 +29,34 @@ const config = {
     },
 };
 
-/* *********************************************************************************
- ****************************** END OF GLOBAL SETTINGS ******************************
- ********************************************************************************** */
+/*==============================================================================
+  GTM loader via Stape
+==============================================================================*/
 
-const STAPE_GTM_SCRIPT_URL_BASE = 'https://load.securedata.eco-worthy.com'; //在Stape的custom loader里
-const STAPE_GTM_CONTAINER_ID = 'cxmuqqvd'; //在Stape的custom loader里
-const STAPE_GTM_LOADER_PREFIX = '2i5'; // custom loader 脚本文件名前缀：<prefix><containerId>.js
-const STAPE_GTM_BASE_QUERY_PARAMS = '4wficl=DRJMNiEgVS0%2BRTYhIksOXlZYQFcRA0UGBxlcBhofDAsdWBIeGA%3D%3D'; //在Shopify的插件（Stape Server GTM）里生成，这个参数可选择的
-// Loader script URL, derived from the constants above — loadGTM() consumes this instead of a hardcoded string
-const STAPE_GTM_SCRIPT_URL = `${STAPE_GTM_SCRIPT_URL_BASE}/${STAPE_GTM_LOADER_PREFIX}${STAPE_GTM_CONTAINER_ID}.js`;
+// Stape's "Container loading path": serves the loader script and receives the
+// store_cookies POST — see sendStoreCookies(). Same URL in theme-liquid.html.
+const STAPE_CONTAINER_LOADING_PATH = 'https://qbgxbxdc.usb.stape.io';
+// Generated as a pair by the Custom Loader power-up, and only valid as a pair:
+// the query string encodes the web container ID, and the path alone 404s.
+const STAPE_LOADER_SCRIPT_NAME = '28eqbgxbxdc.js';
+const STAPE_LOADER_QUERY_STRING = '3fev=CgBFJSwqTzonXTooLlJWVxVZSkxJQQYfXhcMAwgCTBgM';
+const STAPE_LOADER_SCRIPT_URL = `${STAPE_CONTAINER_LOADING_PATH}/${STAPE_LOADER_SCRIPT_NAME}`;
 
+// 由 Shopify 插件（Stape Conversion Tracking）生成
+function loadGTM() {
+    (function (w, d, s, l, i, src) {
+        w[l] = w[l] || [];
+        w[l].push({ 'gtm.start': new Date().getTime(), event: 'gtm.js' });
+        var f = d.getElementsByTagName(s)[0], j = d.createElement(s);
+        j.async = true;
+        j.src = src + "?" + i;
+        f.parentNode.insertBefore(j, f);
+    })(window, document, 'script', 'dataLayer', STAPE_LOADER_QUERY_STRING, STAPE_LOADER_SCRIPT_URL);
+}
+
+/*==============================================================================
+  Helpers
+==============================================================================*/
 function pushEventToDataLayer(eventData) {
     window.dataLayer = window.dataLayer || [];
     window.dataLayer.push(eventData);
@@ -50,7 +64,7 @@ function pushEventToDataLayer(eventData) {
         try {
             window.parent.postMessage(eventData, '*');
         } catch (e) {
-            console.warn("Pixel: Could not post message to parent window.", e);
+            console.warn('[pixel] could not post message to parent window.', e);
         }
     }
     if (eventData.ecommerce) {
@@ -72,7 +86,7 @@ function resolveGmcCountry() {
     const fallback = config.store.gmcCountryFallback;
     const resolved = shop?.countryCode || fallback;
     if (resolved !== fallback) {
-        console.warn(`gmcCountry: resolved "${resolved}" but fallback is "${fallback}". Verify against a real item ID in the GMC feed.`);
+        console.warn(`[pixel] gmcCountry resolved "${resolved}" but fallback is "${fallback}". Verify against a real item ID in the GMC feed.`);
     }
     return resolved;
 }
@@ -100,15 +114,10 @@ if (initContextData) {
     });
 }
 
-//在Shopify插件（Stape Server GTM）里生成
-function loadGTM() {
-    /* ... GTM Loader from previous version ... */
-   (function(w,d,s,l,i,src){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s);j.async=true;j.src=src+"?"+i;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer',STAPE_GTM_BASE_QUERY_PARAMS,STAPE_GTM_SCRIPT_URL);
-}
 
-
-// --- Store cookies bridge (sGTM / Firestore) ---
-
+/*==============================================================================
+  Store cookies bridge (sGTM / Firestore)
+==============================================================================*/
 // Read a first-party cookie through the Shopify Web Pixel sandbox API.
 function getCookie(name) {
     return browser.cookie.get(name).catch(() => null);
@@ -158,6 +167,10 @@ function parseGa4SessionId(sessionCookie) {
     return /^\d+$/.test(sessionId) ? sessionId : null;
 }
 
+// Derived from measurementId, never configured separately — the storefront's
+// gtag.js decides this name, so the two cannot disagree by design.
+const GA_SESSION_COOKIE_NAME = `_ga_${config.conversionTracking.measurementId.replace(/^G-/, '')}`;
+
 // Checkout tokens sGTM has already acknowledged with a 2xx. Every checkout step
 // event retries the send, so this is what keeps the happy path down to a single
 // Firestore write: once a send succeeds the token lands here and later events
@@ -181,7 +194,7 @@ async function sendStoreCookies(checkoutToken, shopifyCustomerId) {
     // Without the join key the payload can never be matched back to an order,
     // and sGTM keys the Firestore collection on it, so there is nowhere to put it.
     if (!checkoutToken) {
-        console.warn('store_cookies: no checkout token, skipping.');
+        console.warn('[pixel] store_cookies: no checkout token, skipping.');
         return;
     }
     if (sentCheckoutTokens.has(checkoutToken) || inFlightCheckoutTokens.has(checkoutToken)) return;
@@ -189,7 +202,6 @@ async function sendStoreCookies(checkoutToken, shopifyCustomerId) {
     // would let a same-tick event through.
     inFlightCheckoutTokens.add(checkoutToken);
 
-    const gaSessionCookieName = `_ga_${config.conversionTracking.g_id}`;
     const [
         gaCookie,
         gaSessionCookie,
@@ -203,7 +215,7 @@ async function sendStoreCookies(checkoutToken, shopifyCustomerId) {
         sepTerm
     ] = await Promise.all([
         getCookie('_ga'),
-        getCookie(gaSessionCookieName),
+        getCookie(GA_SESSION_COOKIE_NAME),
         getCookie('_fbp'),
         getCookie('_fbc'),
         getCookie('gtm_dd_sep_campaign'),
@@ -213,6 +225,17 @@ async function sendStoreCookies(checkoutToken, shopifyCustomerId) {
         getCookie('gtm_dd_sep_source_platform'),
         getCookie('gtm_dd_sep_term')
     ]);
+
+    // Both fallbacks below produce well-formed values that join nothing
+    // downstream, so these warnings are the only signal that they were reached.
+    const gaClientId = parseGa4ClientId(gaCookie);
+    const gaSessionId = parseGa4SessionId(gaSessionCookie);
+    if (!gaClientId) {
+        console.warn('[pixel] no _ga cookie — ga_client_id falls back to a random UUID that matches no GA4 user.');
+    }
+    if (!gaSessionId) {
+        console.warn(`[pixel] no ${GA_SESSION_COOKIE_NAME} cookie — ga_session_id falls back to a timestamp. Check that measurementId matches the property gtag.js writes on this storefront.`);
+    }
 
     const payload = {
         "event": "store_cookies",
@@ -226,9 +249,9 @@ async function sendStoreCookies(checkoutToken, shopifyCustomerId) {
         "fbp": fbp,
         "fbc": fbc,
         "_ga": gaCookie,
-        [gaSessionCookieName]: gaSessionCookie,
-        "ga_client_id": parseGa4ClientId(gaCookie) || generateUUID(),
-        "ga_session_id": parseGa4SessionId(gaSessionCookie) || String(Math.floor(Date.now() / 1000)),
+        [GA_SESSION_COOKIE_NAME]: gaSessionCookie,
+        "ga_client_id": gaClientId || generateUUID(),
+        "ga_session_id": gaSessionId || String(Math.floor(Date.now() / 1000)),
         "shopify_customer_id": shopifyCustomerId,
         "gtm_dd_sep_campaign": sepCampaign,
         "gtm_dd_sep_content": sepContent,
@@ -238,7 +261,7 @@ async function sendStoreCookies(checkoutToken, shopifyCustomerId) {
         "gtm_dd_sep_term": sepTerm
     };
 
-    return fetch(`${STAPE_GTM_SCRIPT_URL_BASE}/data`, {
+    return fetch(`${STAPE_CONTAINER_LOADING_PATH}/data`, {
         method: "POST",
         headers: {
             "Content-Type": "application/json"
@@ -250,15 +273,18 @@ async function sendStoreCookies(checkoutToken, shopifyCustomerId) {
         if (response.ok) {
             sentCheckoutTokens.add(checkoutToken);
         } else {
-            console.error('store_cookies rejected by sGTM:', response.status, response.statusText);
+            console.error('[pixel] store_cookies rejected by sGTM:', response.status, response.statusText);
         }
     }).catch((error) => {
         inFlightCheckoutTokens.delete(checkoutToken);
-        console.error('store_cookies failed to send:', error);
+        console.error('[pixel] store_cookies failed to send:', error);
     });
 }
 
 
+/*==============================================================================
+  Line item mapping
+==============================================================================*/
 const processCheckoutProducts = (lineItemsInput) => {
     let finalProductArray = [];
     let ecomm_prodid_list = [];
@@ -316,6 +342,9 @@ const processCheckoutProducts = (lineItemsInput) => {
 };
 
 
+/*==============================================================================
+  Event subscriptions
+==============================================================================*/
 if (typeof analytics !== 'undefined') {
     // ... (Non-ecommerce event subscriptions - page_view, clicks, search, form_submit - unchanged from previous full code) ...
     if (config.conversionTracking.trackPageViews) {
@@ -566,7 +595,9 @@ if (typeof analytics !== 'undefined') {
     }
 
 
-    /* *************** BEGIN CHECKOUT *************** */
+    /*==========================================================================
+      Begin checkout
+    ==========================================================================*/
     if (config.conversionTracking.trackBeginCheckout) {
         analytics.subscribe('checkout_started', (event) => {
             loadGTM();
@@ -574,7 +605,7 @@ if (typeof analytics !== 'undefined') {
             const eventContextData = event.context?.document;
             const checkout = event.data?.checkout; // Use checkout object directly for this event
             if (!checkout) {
-                console.warn("Begin Checkout: No checkout data found.");
+                console.warn('[pixel] begin_checkout: no checkout data found.');
                 return;
             }
             sendStoreCookies(checkout.token, checkout.customer?.id || null);
@@ -599,7 +630,9 @@ if (typeof analytics !== 'undefined') {
         });
     }
 
-    /* *************** STORE COOKIES RETRY *************** */
+    /*==========================================================================
+      Store cookies retry
+    ==========================================================================*/
     // checkout_started is a single shot: if its request never leaves the page,
     // the order can never be attributed. Every later checkout step carries the
     // same checkout.token, so re-running the send there costs one short-circuit
@@ -618,6 +651,8 @@ if (typeof analytics !== 'undefined') {
             const checkout = event.data?.checkout;
             if (checkout?.token) {
                 sendStoreCookies(checkout.token, checkout.customer?.id || null);
+            } else {
+                console.warn(`[pixel] ${eventName} carries no checkout.token — the store_cookies retry cannot run on this step.`);
             }
         });
     });
@@ -671,17 +706,18 @@ if (typeof analytics !== 'undefined') {
         });
     }
 
-    /* *************** PURCHASE *************** */
+    /*==========================================================================
+      Purchase
+    ==========================================================================*/
     if (config.conversionTracking.trackPurchase) {
         analytics.subscribe('checkout_completed', (event) => {
             loadGTM();
-            console.log(event)
             const eventContextData = event.context?.document;
             // For 'checkout_completed', event.data.checkout is the primary and most complete data source.
             const checkoutDataSource = event.data?.checkout;
 
             if (!checkoutDataSource) {
-                console.error("Pixel Purchase Event: No checkout data source found in event.data.checkout. Cannot process.");
+                console.error('[pixel] purchase: no checkout data in event.data.checkout, cannot process.');
                 return;
             }
             // The 'order' object is nested within event.data.checkout.order if available
@@ -718,6 +754,9 @@ if (typeof analytics !== 'undefined') {
             const totalOrderWideDiscountAmount = parseFloat(checkoutDataSource.discountsAmount?.amount || 0);
             const paymentGateway = checkoutDataSource.transactions?.[0]?.gateway || 'N/A';
             const transactionId = orderDataSource?.name || orderDataSource?.id || checkoutDataSource.token;
+            if (!transactionId) {
+                console.warn('[pixel] purchase has no transaction_id — sGTM writes no dedup key, so the backfill will report this order a second time.');
+            }
 
 
             const dataLayerObj = {
@@ -761,13 +800,10 @@ if (typeof analytics !== 'undefined') {
                     items: processedData.items
                 }
             };
-            // console.log("Final Purchase Datalayer:", JSON.stringify(dataLayerObj, null, 2));
             pushEventToDataLayer(dataLayerObj);
         });
     }
 
 } else {
-    console.error("Pixel: Shopify 'analytics' object not found. Tracking will not work.");
+    console.error('[pixel] Shopify analytics object not found — no events will be tracked.');
 }
-
-console.log("Shopify Pixel Initialized with GTM/Stape integration and refined logic (v.complete_final_fix_attempt).");
