@@ -62,8 +62,22 @@ value is Shopify's checkout token (32-hex), which the `orders/paid` webhook
 exposes as `checkout_token`. Shopify's *own* `cart_token` on the same order is a
 different value in a different format and joins at 0%.
 
-> **Do not rename this field.** `git log` will show it renamed to
-> `checkout_token` and then back. Do not rename it a third time.
+> **Do not rename this field on a deployed client.** `git log` will show it
+> renamed to `checkout_token` and then back. Do not rename it a third time.
+>
+> The freeze exists because the sGTM container is already live. On a client
+> where nothing has shipped yet the name can — and should — be corrected before
+> launch; modesees did, see [MODESEES](#modesees). Renaming is only safe as an
+> atomic four-way change, because `Write Checkout Token` sends the whole event
+> data payload to Firestore, which turns the field name into a stored document
+> field that the lookups filter on:
+>
+> 1. the pixel's outgoing field
+> 2. sGTM `ED - checkout_token` — keyPath
+> 3. sGTM `ga_client_id` — queryKey
+> 4. sGTM `ga_session_id` — queryKey
+>
+> Miss any one and the join returns nothing, with no error.
 
 Three distinct identifiers are easy to confuse:
 
@@ -239,9 +253,11 @@ them first.
   and `checkout_completed`; double injection on a single-page checkout is
   unverified.
 - **`shopify/web-pixel.js` carries one client's `config` values** as its
-  committed defaults. `main` holds eco-worthy US; a client branch retargets them
-  for that client and must not be merged back. Read `config` before building
-  anything — which values you get depends on the branch you are standing on.
+  committed defaults. Every deployed client now has its own branch —
+  `eco-worthy`, `speediance`, `modesees` — while `main` still happens to hold
+  eco-worthy's values rather than a neutral baseline. Read `config` and check
+  which branch you are standing on before building anything, and build each
+  client's artefact from that client's branch.
 
 ---
 
@@ -360,9 +376,10 @@ is what established that the field reports the shop's own country rather than
 the market it sells to. A test hit from it therefore carries `shopify_US_…` ids
 by design, not as a bug.
 
-The `speediance` branch retargets `shopify/web-pixel.js` at the CA values and is
-deliberately not merged to `main`, which keeps eco-worthy's. The delivered
-artefact is `speediance/web-pixel.ca.min.js` (gitignored).
+The `speediance` branch retargets `shopify/web-pixel.js` at the CA values; build
+this client's artefact from that branch, not from `main`, which still holds
+eco-worthy's. The delivered artefact is `speediance/web-pixel.ca.min.js`
+(gitignored).
 
 #### Merchant Center
 
@@ -394,3 +411,165 @@ format; recheck after the 2026-08-18 Content API sunset.
 - **No `item_variant` in the observed payload.** The pixel sends
   `sku || title`; unconfirmed whether the demo products have neither or the tag
   does not map it.
+
+### MODESEES
+
+A women's fashion storefront on Shopify's **Paris** theme, not Dawn — the
+browser-side selectors share almost nothing with the other two clients. The
+containers were cloned from eco-worthy's and still carried its defects when work
+started; see [Cloned-container defects](#cloned-container-defects) below.
+
+**Nothing is deployed.** As of 2026-08-20 `modesees.com` carries no GTM
+container at all — only Shopify's native gtag (`G-F5R3YM4Z73`) and two Google
+Ads tags. Both GTM workspaces hold unpublished drafts, so GTM Preview cannot
+attach to the storefront and nothing has been verified end to end.
+
+#### Identifiers
+
+| Placeholder | Value |
+| --- | --- |
+| `<gtm-web-container-id>` | `GTM-KD9BJV54` — account `6369409954`, container `260123513`, named `Modesees web GTM` |
+| `<gtm-server-container-id>` | `GTM-538Z4G6H` — account `6369409954`, container `260817352`, named `Modesees sGTM` |
+| `<stape-container-identifier>` | `qbgxbxdc` |
+| `<container-loading-path>` | `https://load.securedata.modesees.com` |
+| `<tagging-server-url>` | `https://securedata.modesees.com` — both it and the loading path answer `/healthy` with 200 |
+| `<gcp-project>` | `modesees01`, database `(default)`, FIRESTORE_NATIVE, us-central1 |
+
+Loader script `28eqbgxbxdc.js` — prefix `28e`, query string
+`3fev=CgBFJSwqTzonXTooLlJWVxVZSkxJQQYfXgkXBh0UBxQQShsNFQ%3D%3D`. Verified 200
+and the served bundle contains `GTM-KD9BJV54`; the bare path without the query
+string 404s, so the pair is only valid together. `theme-liquid.html` hardcodes
+the same URL the pixel assembles from its constants — change them together.
+
+Firestore was created from scratch on 2026-08-20 (the project had
+`firestore.googleapis.com` disabled and no database). Stape reaches it through
+the **Google Service Account power-up**, not through GCP-hosted credentials:
+service account `stape-sgtm@modesees01.iam.gserviceaccount.com`, role
+**Cloud Datastore User** (`roles/datastore.user`), JSON key uploaded in Stape.
+
+> `roles/datastore.user` is the whole grant. `datastore.editor` also works but
+> adds `backups.delete`, `backupSchedules.*` and `userCreds.create` — rights a
+> key held by a third party should not carry. Security rules are irrelevant
+> here: they govern client SDKs, and IAM-authenticated server access bypasses
+> them, so the database is Restrictive.
+
+#### Stores
+
+| Store | Hostname | Shop domain | Measurement ID |
+| --- | --- | --- | --- |
+| production | `modesees.com` | `yxz5tg-xz.myshopify.com` | `G-5LSR0MTS2B` |
+| test | `modesees-fs-test.myshopify.com` | same | `G-4FLMVWWG56` |
+
+`www.modesees.com` 301s to the apex, so `{{Page Hostname}}` is always
+`modesees.com` and the web Lookup Table needs only the one row. The shop domain
+is a randomly generated store name and looks nothing like the brand — the
+server-side table keys on it, so the two tables share no key.
+
+#### The checkout token name is corrected here
+
+modesees sends **`checkout_token`**, not the `cart_token` misnomer the
+[join contract](#the-join-contract) describes. The correction was made before
+anything shipped, as the atomic four-way change that section lists: the pixel
+field, `ED - checkout_token`'s keyPath, and the queryKey on both
+`Firestore - ga_client_id` and `Firestore - ga_session_id`.
+
+> **Never build eco-worthy's artefact from `main`.** Every deployed client now
+> has its own branch, so merging modesees into `main` is fine — but whatever
+> lands there becomes the default the next client is cloned from, and
+> eco-worthy's live sGTM still reads `cart_token`. Build each client from its
+> own branch.
+
+The webhook side was already correct — Shopify's own `checkout_token` — so
+`ED - webhook_checkout_token` did not change. After the correction it and
+`ED - checkout_token` are configured identically and differ only in which event
+they read from; both were kept so the source of each value stays visible.
+
+#### Paris theme
+
+The two interaction trackers were rewritten from eco-worthy's Dawn versions.
+Source of truth is `gtm/click-interaction-tracker.html` and
+`gtm/link-interaction-tracker.html`; the GTM tags are byte-identical copies.
+They share `window.dlIdentifyModule` — the eco-worthy name
+`ecoworthyIdentifyModule` is gone — and the link tag fires on Initialization
+while the click tag fires on Page View, so both copies must stay identical.
+
+What differs from Dawn, and why the port was not a selector swap:
+
+- **Flickity, not Swiper.** Every `[class*="swiper"]` rule was dead code.
+- **`<product-card>` custom element**, not `.card-wrapper`. Paris has no
+  `.grid__item`, so v3's two-stage product-card heuristic is unnecessary.
+- **Unstable tokens in three shapes** — Shopify Magic `...aigenblock...`
+  suffixes, `template--<digits>__` section scoping, and trailing build hashes.
+  `normalizeToken()` strips each and keeps the semantic prefix; it also feeds
+  `element_id`, whose Paris values carry Shopify numeric ids.
+- **Section fallback needs a hex guard.** Several Paris sections are named by a
+  bare hex id that would otherwise become the module value verbatim.
+- **No blog**, so the `blog_list` branch is gone. Judge.me is present and
+  unchanged. Frequently Bought Together (`cbb-*`) renders outside every
+  `shopify-section` and needed its own rule.
+
+Module coverage measured against the live DOM: 586 / 630 / 511 clickable
+elements on home, collection and PDP, one `unknown` each — the skip-to-content
+link. `debug_mode` is deliberately left `true` for the test period.
+
+> The AI "triple banner" section is named **`promo_tiles`**, not `*_banner`, so
+> that `GA4 - banner_click`'s `module contains banner` condition cannot sweep it
+> up. Two module values are contract: `hero_banner` and anything matching
+> `/menu/`.
+
+#### Cloned-container defects
+
+Both containers were copied from eco-worthy, which replicated its defects. All
+are fixed here; the eco-worthy originals are **still live**.
+
+- **`DLV - element_id` read the key `button_state`** — a copy-paste slip, so the
+  parameter was permanently empty. The pixel emits neither key; both come only
+  from the click tracker.
+- **`GA4 - social_icon_click` sent Event Name `menu_click`**, byte-identical to
+  `GA4 - menu_click` including its parameter table, so social clicks were
+  indistinguishable from menu clicks in GA4. On eco-worthy it is worse: 6 of 13
+  social links sit inside `.menu-drawer`, so both tags fire and one click
+  produces two identical `menu_click` hits.
+- **`element_id` appeared twice** in three tags' parameter tables.
+- **Cross-client leakage**: the server Lookup Table defaulted to eco-worthy's
+  `G-66S3XN5ND0`, `project id` pointed at `eco-worthy-20260701`, `server_url`
+  at `https://securedata.eco-worthy.com`, and the `GA4 client`'s
+  `gtagMeasurementIds` listed eco-worthy's four IDs.
+- **Credential exposure**: `CST - OpenAI Ads API Key` and its test twin still
+  hold eco-worthy's live `sk-svcacct-…` service account keys. The three
+  `OpenAI Ads CAPI - *` tags are paused, but the keys are readable by anyone
+  with access to this container.
+
+> The lesson is the workflow, not any single field: cloning a container for a
+> new client with no diff or QA step carries every defect across. Worth keeping
+> a clean template container and checking tag name vs Event Name, variable name
+> vs key, parameter-table duplicates, and trigger-to-DOM correspondence before
+> delivery — all four would have fired here.
+
+#### Open for this client
+
+- **Nothing is installed on the storefront.** `GTM-KD9BJV54` is absent from
+  `modesees.com`, so no Preview, no end-to-end verification, no data.
+- **Neither container has ever been published.** Both hold a single version 1
+  — the web one is literally named `Empty Container`. Installing the theme
+  snippet or pointing the backfill at sGTM today reaches a container with no
+  tags in it: no Firestore write, no GA4 forward, no error.
+- **OpenAI Ads keys still sit in the sGTM container** — the three CAPI tags are
+  paused, so nothing is sent, but the keys remain readable.
+- **Stape's service-account key upload is unverified** from here — only the GCP
+  side (project, database, SA, role) was confirmed.
+- **eco-worthy's copies of the two defects are unfixed** and the decision to fix
+  them is the client's; both change GA4 continuity.
+- **OpenAI Ads keys should be removed** from this container regardless of
+  whether modesees runs OpenAI Ads, and rotated on eco-worthy's side.
+- **`Include webhook` is dead config** — its `affectedTagTypes` is `cvt_P842H`,
+  a tag type no tag in this container has.
+- **Two parameter-name typos**: `cus_hit_timestape` in both webhook PageView
+  tags, and `transasction_id` in `Write Webhook Transaction ID` (paused).
+- **`cus_hit_timestamp` may begin with `undefined`**, as observed on speediance
+  — same configuration, unverified here.
+- **`CJS - click_product_name` returns a URL handle, not a name.** 12 of 42
+  product handles on the homepage exceed GA4's 100-char limit, and truncation
+  removes the trailing style code that identifies the product.
+- **Two zero-reference Event Data variables**: `ED - fake_client_id` duplicates
+  `ED - client_id` exactly, and `ED - user_id` is unused.
