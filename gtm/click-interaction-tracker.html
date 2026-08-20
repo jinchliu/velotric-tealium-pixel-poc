@@ -1,0 +1,631 @@
+<script>
+// ============================================================================
+// Modesees - site-wide click tracking, v1 (2026-08-19)
+//
+// Ported from the Eco-Worthy tracker v3 and retargeted at Shopify's *Paris*
+// theme (theme_store_id 2702, schema 1.2.0). Almost none of the Dawn
+// selectors survive the port. What changed and why:
+//
+//   [P1] The carousel library is Flickity, not Swiper. Every [class*="swiper"]
+//        rule was dead code, so the `carousel` branch never fired and slider
+//        controls fell through to the section fallback.
+//
+//   [P2] Product cards are a <product-card> custom element, not .card-wrapper.
+//        Paris has no .grid__item at all (its grid is .grid-item-md-*), so the
+//        two-stage isProductCardContext() dance from v3 is unnecessary here -
+//        the custom element is an unambiguous marker.
+//
+//   [P3] Paris scopes classes and ids with `template--<digits>__` plus a
+//        6-char mixed-case hash, and the AI-generated sections append a
+//        ~40-char lowercase `...aigenblock...` token. v3's random-class filter
+//        caught neither (it required a mixed-case tail), so element_classes
+//        would have exploded GA4's cardinality. normalizeToken() strips both
+//        and keeps the semantic prefix rather than dropping the whole token.
+//
+//   [P4] element_id gets the same normalisation. Paris ids carry Shopify
+//        numeric ids (product-media-38980681105646), slide hashes
+//        (slideshow-slide-slide_HKd3qh) and app block ids
+//        (shopify-block-ASk5MR2FwbnZncElBN__judge_me_...).
+//
+//   [P5] The section-name fallback needs a guard: several Paris sections are
+//        named by a bare hex id (template--19612159672558__17839320206e3f6435),
+//        which would otherwise become the module value verbatim.
+//
+//   [P6] This storefront has no blog, so the blog_list branch is gone.
+//
+//   [P7] Judge.me is present here too, so that branch carries over unchanged.
+//
+//   [P8] click_url is now emitted unconditionally - see the comment at the
+//        push site. The old conditional let stale URLs leak across events.
+//
+// MODULE VOCABULARY IS A CONTRACT. Two triggers read it:
+//     `hero_banner`             -> GA4 - banner_click
+//     anything matching /menu/  -> GA4 - menu_click
+// Do not rename those without updating the triggers. Note that the AI "triple
+// banner" section is deliberately called promo_tiles, NOT *_banner, so that a
+// `module contains banner` condition cannot sweep it up.
+//
+// This file and link-interaction-tracker.html must stay in sync: they share
+// window.dlIdentifyModule, and the link tag fires on Initialization while this
+// one fires on Page View.
+// ============================================================================
+(function() {
+  var debug_mode = true;
+
+  function log() {
+    if (debug_mode && window.console) {
+      var args = Array.prototype.slice.call(arguments);
+      args.unshift('[click tracking]');
+      console.log.apply(console, args);
+    }
+  }
+
+  window.dataLayer = window.dataLayer || [];
+
+  // --------------------------------------------------------------------------
+  // Whitelist / blacklist
+  //
+  // handleClick() already accepts every <a>, <button>, <summary> and
+  // [role="button"] on its own, so the whitelist only needs to cover
+  // non-semantic containers (div / li / label) that Paris makes clickable.
+  // --------------------------------------------------------------------------
+  var config = {
+    whitelist: [
+      'button', '[role="button"]', 'summary', 'details', '.btn',
+      // header
+      '.header-icons-item', '.cart-icon', '.search-icon', '.account-icon',
+      '.localization-item', '.site-nav-item', '.site-nav-link', '.menu-back',
+      '.logo-image', '.nav-grandmenu',
+      // product cards / quick view
+      'product-card', '.product-card', '.product-card-inner', '.product-media-card',
+      '.product-media-cards', '.product-name', '.product-title-wrapper',
+      'quick-view', '.quick-view-element', '.quick-view-icon',
+      // variants / swatches / quantity
+      '.swatch-option', '.color-swatch', '.product-swatch-item', '.swatch-variant-item',
+      'quantity-input', '.quantity-button', '.add-to-cart-btn',
+      // pdp gallery
+      '.product-media-popup-btn', '.product-slider-thumbnail', '.product-info-item',
+      // Flickity
+      '.flickity-button', '.flickity-prev-next-button', '.flickity-page-dots',
+      '.dot', '.slider-dots', '.hero-media-card', '.slider-wrapper',
+      // collection filters / sorting
+      'sidebar-filter-form', 'filter-remove', '.facets-mobile-toggle', '.facet-summary',
+      '.sortby-item', '.filter-sort-names', '.facets-filters-box',
+      // cart / drawers / modals
+      'cart-drawer', 'mini-cart', 'cart-items', '.minicart-panel',
+      'side-drawer', '.side-drawer-panel', '.side-drawer-modal', '.modal-drawer-panel',
+      // reviews
+      '.jdgm-star', '.jdgm-write-review-btn', '.jdgm-tab', '.jdgm-rev-widg',
+      '.jdgm-write-rev-link',
+      // footer / misc
+      '.social-icons-link', '.footer-logo', '.footer-navi-column',
+      '.announcement-inner-card',
+      // manual instrumentation escape hatch
+      '[data-ga-track]', '[data-ga-action-name]', '[data-ga-module]',
+      '[data-ga-interaction-type]', '[data-ga-element-id]', '[data-ga-element-classes]',
+      '[data-ga-device-category]', '[data-ga-click-url]', '[data-ga-user-interaction-type]'
+    ],
+    blacklist: [
+      'input:not([type="checkbox"]):not([type="radio"]):not([type="submit"])',
+      'textarea', 'select',
+      '[type="text"]', '[type="password"]', '[type="email"]', '[type="tel"]',
+      '[type="number"]', '[type="search"]', '[type="date"]', '[type="time"]',
+      '[type="datetime"]', '[type="datetime-local"]', '[type="month"]',
+      '[type="week"]', '[type="url"]', '[type="color"]', '[type="range"]',
+      '[type="file"]', '[contenteditable="true"]',
+      '.no-track', '.js-no-track', '[data-no-track]', '[data-ga-track="false"]'
+    ]
+  };
+
+  var processedClicks = {};
+
+  // Flickity injects aria-label="1 / 4" style labels on slides; reject those.
+  var GENERIC_ARIA = /^(\s*\d+\s*[\/\\|]\s*\d+\s*|go to slide.*|next slide|previous slide|next|prev|previous|slide \d+.*|\d+)$/i;
+
+  // Must contain at least one letter / digit / CJK char, else the text is
+  // decoration such as a chevron glyph.
+  var HAS_WORD = /[a-zA-Z0-9一-龥]/;
+
+  // GA4 caps parameter values at 100 chars; leave headroom.
+  var MAX_ACTION_NAME_LEN = 80;
+
+  // --------------------------------------------------------------------------
+  // [P3][P4] Token normalisation, shared by class names and element ids.
+  //
+  // Paris produces three kinds of unstable token:
+  //   a) Shopify Magic blocks:  ...-ar2g3qnjhzuszcxdboaigenblock9b25778tab6dq
+  //   b) section scoping:       ...-template--19612159672558__slideshow_AwDwyy
+  //   c) trailing build hash:   slideshow-slide-slide_HKd3qh
+  // Rather than discarding the whole token (which loses all semantics) each
+  // rule strips only the unstable tail.
+  // --------------------------------------------------------------------------
+
+  // A Shopify build hash interleaves case (AwDwyy, rQnpJF, HKd3qh, eUkeEW).
+  // A normal capitalised word does not (Template, Content, Search). Drop one
+  // leading capital before testing so "Template" is not mistaken for a hash.
+  function looksHashed(token) {
+    if (!token || token.length < 6) return false;
+    var t = token.replace(/^[A-Z]/, '');
+    return /[a-z]/.test(t) && /[A-Z]/.test(t);
+  }
+
+  function normalizeToken(token) {
+    if (typeof token !== 'string' || !token) return '';
+    var t = token;
+    // a) AI-generated block suffix
+    t = t.replace(/[-_][a-z0-9]*aigenblock[a-z0-9]*$/i, '');
+    // b) section / template scoping suffix
+    t = t.replace(/[-_]{1,2}(template|sections)--\d+__.*$/i, '');
+    // Shopify app block prefix: shopify-block-<id>__<handle>
+    t = t.replace(/^shopify-block-[A-Za-z0-9]+__/, '');
+    t = t.replace(/^shopify-section-/, '');
+    // Embedded Shopify numeric ids, e.g. the per-product swatch input id
+    // product-9328865935598_option-... The trailing-token loop below cannot
+    // reach these because they sit in the middle of the token.
+    t = t.replace(/[-_]\d{8,}(?=[-_]|$)/g, '');
+    // c) trailing build hash or bare numeric id, applied repeatedly because
+    //    Paris stacks them
+    for (var i = 0; i < 3; i++) {
+      var m = /^(.*)[-_]([A-Za-z0-9]+)$/.exec(t);
+      if (!m) break;
+      var tail = m[2];
+      if (looksHashed(tail) || /^\d{6,}$/.test(tail)) { t = m[1]; } else { break; }
+    }
+    // Whatever survives must still carry meaning; a bare hex blob does not.
+    if (/^[0-9a-f]{8,}$/i.test(t) || /^\d+$/.test(t)) return '';
+    return t;
+  }
+
+  function cleanClassName(cn) {
+    if (typeof cn !== 'string') return '';
+    var seen = {};
+    return cn.split(/\s+/).map(normalizeToken).filter(function(c) {
+      if (!c || seen[c]) return false;
+      seen[c] = true;
+      return true;
+    }).join(' ');
+  }
+
+  function cleanElementId(id) {
+    return normalizeToken(id || '');
+  }
+
+  // Flickity control selectors (replacing the Swiper ones).
+  var NEXT_SEL = '.flickity-prev-next-button.next,.flickity-button.next';
+  var PREV_SEL = '.flickity-prev-next-button.previous,.flickity-button.previous';
+  var DOT_SEL  = '.flickity-page-dots .dot,.slider-dots,[class*="page-dots"] li';
+
+  function getDeviceCategory() {
+    var width = window.innerWidth;
+    if (width < 768) return 'mobile';
+    if (width < 1024) return 'tablet';
+    return 'desktop';
+  }
+
+  // Replace illegal chars with a SPACE before collapsing whitespace, so that
+  // "51.2V" does not become "512V" and "4 / 4" does not become "4  4".
+  function cleanText(text) {
+    if (!text) return '';
+    var s = String(text)
+      .replace(/[^a-zA-Z0-9_一-龥\- ]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (s.length > MAX_ACTION_NAME_LEN) {
+      s = s.slice(0, MAX_ACTION_NAME_LEN).replace(/\s+\S*$/, '');
+    }
+    return s;
+  }
+
+  function safeMatchesSelector(element, selector) {
+    if (!element || !selector || element.nodeType !== 1) return false;
+    try {
+      if (typeof element.matches === 'function') return element.matches(selector);
+      var matchesMethod = element.matches || element.webkitMatchesSelector || element.msMatchesSelector;
+      if (matchesMethod) return matchesMethod.call(element, selector);
+    } catch (e) {}
+    return false;
+  }
+
+  function safeClosest(element, selector) {
+    if (!element || element.nodeType !== 1) return null;
+    try {
+      if (typeof element.closest === 'function') return element.closest(selector);
+      var el = element;
+      while (el && el.nodeType === 1) {
+        if (safeMatchesSelector(el, selector)) return el;
+        el = el.parentElement;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function isInWhitelist(element) {
+    if (!config.whitelist || !config.whitelist.length) return true;
+    try {
+      if (element.hasAttribute && element.hasAttribute('data-ga-track') &&
+          element.getAttribute('data-ga-track') === 'false') return false;
+      for (var i = 0; i < config.whitelist.length; i++) {
+        if (safeMatchesSelector(element, config.whitelist[i])) return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  function isInBlacklist(element) {
+    if (!config.blacklist || !config.blacklist.length) return false;
+    try {
+      for (var i = 0; i < config.blacklist.length; i++) {
+        if (safeMatchesSelector(element, config.blacklist[i])) return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  function getLinkOf(element) {
+    try {
+      var d = element.getAttribute('data-href') || element.getAttribute('data-url') ||
+              element.getAttribute('data-link');
+      if (d) return d;
+      if (element.tagName === 'A' && element.getAttribute('href')) return element.getAttribute('href');
+      var a = element.querySelector('a[href]');
+      return a ? a.getAttribute('href') : null;
+    } catch (e) { return null; }
+  }
+
+  function slugToText(url) {
+    try {
+      var p = new URL(url, location.href).pathname.split('/').filter(Boolean).pop() || '';
+      return p.replace(/[-_]+/g, ' ').trim();
+    } catch (e) { return ''; }
+  }
+
+  // Strip price / badge / review noise so a product card does not produce a
+  // 200-char concatenation. Paris class names, not Dawn's.
+  function getOwnText(element) {
+    try {
+      var c = element.cloneNode(true);
+      var noise = ['script', 'style', 'noscript', '.visually-hidden', '.sr-only',
+                   '.price-wrapper', '.item-price', '.item-price-old',
+                   '.badge-card', '.badge-item', '.jdgm-widget', '.jdgm-prev-badge',
+                   '.quick-view-loader', '.loader-image', '.cart-total-count'];
+      for (var i = 0; i < noise.length; i++) {
+        try {
+          var nodes = c.querySelectorAll(noise[i]);
+          for (var j = 0; j < nodes.length; j++) {
+            if (nodes[j].parentNode) nodes[j].parentNode.removeChild(nodes[j]);
+          }
+        } catch (e) {}
+      }
+      return (c.textContent || '').trim();
+    } catch (e) {
+      return (element.textContent || '').trim();
+    }
+  }
+
+  // Priority: manual tag -> inner heading -> usable aria/title -> own text ->
+  // img alt -> link slug -> semantic fallback -> first clean class.
+  function safeGetElementText(element) {
+    if (!element) return '';
+    try {
+      var manual = element.getAttribute('data-ga-action-name');
+      if (manual && manual.trim()) return manual.trim();
+
+      var head = element.querySelector(
+        '.product-name, .product-title-wrapper, .side-drawer-modal-title, h1, h2, h3, h4, h5, h6');
+      if (head) {
+        var ht = (head.textContent || '').trim();
+        if (HAS_WORD.test(ht)) return ht;
+      }
+
+      var attr = element.getAttribute('aria-label') || element.getAttribute('title') || element.value;
+      if (attr && attr.trim() && !GENERIC_ARIA.test(attr.trim())) return attr.trim();
+
+      var t = getOwnText(element);
+      if (HAS_WORD.test(t)) return t;
+
+      var img = element.querySelector('img');
+      var alt = img && img.getAttribute('alt');
+      if (alt && HAS_WORD.test(alt)) return alt.trim();
+
+      var lk = getLinkOf(element);
+      if (lk) {
+        var slug = slugToText(lk);
+        if (HAS_WORD.test(slug)) return slug;
+      }
+
+      // Icon / control fallbacks. Paris uses bare class names on the header
+      // icons (a.user, a.search, a.cart) plus a semantic wrapper li.
+      if (safeMatchesSelector(element, '[class*="social"]') && element.href) {
+        try {
+          return 'Social ' + new URL(element.href).hostname.replace(/^www\./, '').split('.')[0];
+        } catch (e) {}
+      }
+      var nm = (element.getAttribute('name') || '').toLowerCase();
+      if (safeMatchesSelector(element, '[class*="quantity"]')) {
+        return nm === 'plus' ? 'Qty Plus' : (nm === 'minus' ? 'Qty Minus' : 'Qty Btn');
+      }
+      if (safeMatchesSelector(element, NEXT_SEL)) return 'Slider Next';
+      if (safeMatchesSelector(element, PREV_SEL)) return 'Slider Prev';
+      if (safeMatchesSelector(element, DOT_SEL))  return 'Slider Dot';
+      if (safeMatchesSelector(element, '.search-icon,a.search,[class*="search"]'))   return 'Search Icon';
+      if (safeMatchesSelector(element, '.account-icon,a.user,[class*="account"]'))   return 'Account Icon';
+      if (safeMatchesSelector(element, '.cart-icon,a.cart,[class*="cart"]'))         return 'Cart Icon';
+      if (safeMatchesSelector(element, '.localization-item'))                        return 'Locale Switcher';
+      if (safeMatchesSelector(element, '.menu-back,[class*="toggle"]'))              return 'Menu Toggle';
+      if (safeMatchesSelector(element, '[class*="close"]'))                          return 'Close Btn';
+      if (safeMatchesSelector(element, '.logo-image,.footer-logo,[class*="logo"]'))  return 'Brand Logo';
+      if (safeMatchesSelector(element, '.quick-view-icon,quick-view'))               return 'Quick View';
+      if (safeMatchesSelector(element, '[class*="play"]'))                           return 'Play Video';
+
+      // Slide fallback: positional index, never "N / M".
+      if (safeMatchesSelector(element, '.hero-media-card,.product-media-cards,.flickity-slider > *')) {
+        var idx = element.parentElement
+          ? Array.prototype.indexOf.call(element.parentElement.children, element) : -1;
+        return 'Slide ' + (idx + 1);
+      }
+
+      var cls = cleanClassName(element.className).split(/\s+/)[0];
+      return cls || '';
+    } catch (e) { return ''; }
+  }
+
+  // --------------------------------------------------------------------------
+  // [P5] Section fallback
+  //
+  // Paris section ids look like:
+  //   sections--19612159967470__header
+  //   template--19612159672558__slideshow_AwDwyy
+  //   template--19612159672558__17839320206e3f6435   <- AI block, hex only
+  // The last form must not become a module value, hence the hex guard in
+  // normalizeToken() plus the explicit AI-block lookup below.
+  // --------------------------------------------------------------------------
+  var SECTION_MODULE_MAP = {
+    'header':            'header_menu',
+    'announcement-bar':  'announcement_bar',
+    'footer':            'footer',
+    'slideshow':         'hero_banner',
+    'banner':            'hero_banner',
+    'featured_collection': 'product_list',
+    'related-products':  'product_recommendations',
+    'main-collection':   'collection_grid',
+    'main':              'pdp_main',
+    'images_carousel':   'carousel',
+    'breadcrumb':        'breadcrumb',
+    'blocks':            'content_block',
+    'rich_text':         'content_block',
+    'newsletter-popup':  'account_popup',
+    'age-verification-popup': 'account_popup'
+  };
+
+  // Shopify Magic blocks expose themselves as a custom element whose tag name
+  // is "<semantic-name>-<hash>aigenblock<hash>". The semantic half is the only
+  // stable, readable identifier those sections have.
+  var AI_BLOCK_MODULE_MAP = {
+    'icon-features':    'icon_features',
+    'category-grid':    'category_grid',
+    'customer-reviews': 'customer_reviews',
+    // Deliberately NOT *_banner: a `module contains banner` trigger must not
+    // pick this up. See the header comment.
+    'triple-banner':    'promo_tiles'
+  };
+
+  function moduleFromAiBlock(element) {
+    try {
+      var el = element;
+      while (el && el.nodeType === 1) {
+        var tag = (el.tagName || '').toLowerCase();
+        if (tag.indexOf('aigenblock') !== -1) {
+          var semantic = tag.split(/-?[a-z0-9]*aigenblock/)[0].replace(/-a[a-z0-9]*$/, '');
+          if (AI_BLOCK_MODULE_MAP[semantic]) return AI_BLOCK_MODULE_MAP[semantic];
+          var norm = semantic.replace(/[-\s]+/g, '_').toLowerCase();
+          return /^[0-9a-f_]+$/.test(norm) ? null : norm;
+        }
+        el = el.parentElement;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function moduleFromSection(element) {
+    try {
+      var sec = safeClosest(element, '[id^="shopify-section"]');
+      if (!sec || !sec.id) return null;
+      var raw = sec.id
+        .replace(/^shopify-section-/, '')
+        .replace(/^template--\d+__/, '')
+        .replace(/^sections--\d+__/, '');
+      if (!raw) return null;
+      if (SECTION_MODULE_MAP[raw]) return SECTION_MODULE_MAP[raw];
+      var norm = normalizeToken(raw);
+      if (SECTION_MODULE_MAP[norm]) return SECTION_MODULE_MAP[norm];
+      if (!norm) return null;                       // hex-only section id
+      return norm.replace(/[-\s]+/g, '_').toLowerCase();
+    } catch (e) { return null; }
+  }
+
+  // --------------------------------------------------------------------------
+  // Module identification. ORDER IS PRIORITY - do not reshuffle casually.
+  // Shared with link-interaction-tracker.html; keep both copies identical.
+  // --------------------------------------------------------------------------
+  window.dlIdentifyModule = function(element) {
+    if (!element) return 'unknown';
+    function cl(sel) { return safeClosest(element, sel); }
+    try {
+      // Header first. Paris nests <a> inside <summary> inside li.site-nav-item.
+      if (cl('header.header, .header-section, .main-header-top, nav.nav-main-wrapper, #mobile-nav-menu, .drawer-mobile-menu, .site-nav-item, .header-icons-item, .navbar')) {
+        return cl('.nav-grandmenu, .mega-menu, [class*="mega"]') ? 'mega_menu' : 'header_menu';
+      }
+      if (cl('footer.footer, #shopify-section-footer, .footer-inner-wrapper, .footer-navi-menus, .footer-logo-box, .footer-newsletter'))
+                                                                                              return 'footer';
+      if (cl('.announcement-wrapper, .announcement-inner-card, .announcement-bar-carousel'))   return 'announcement_bar';
+      if (cl('.jdgm-widget, .jdgm-rev-widg, .jdgm-tab, .jdgm-write-review-btn, .jdgm-write-review-modal, .jdgm-modal, [class*="jdgm-"]'))
+                                                                                              return 'product_reviews';
+      // Frequently Bought Together app. Like Judge.me it renders outside any
+      // shopify-section, so the section fallback cannot name it.
+      if (cl('[class*="cbb-frequently-bought"], [class*="cbb-recommendations"]'))              return 'frequently_bought';
+      // [P2] The custom element is unambiguous; no .grid__item heuristics needed.
+      if (cl('product-card, .product-card, .product-card-inner, quick-view, .quick-view-element'))
+                                                                                              return 'product_list';
+      if (cl('cart-drawer, mini-cart, cart-items, .minicart-panel, .cart-drawer-empty, #minicart'))
+                                                                                              return 'cart_drawer';
+      if (cl('predictive-search, .predictive-search-main, .predictive-search-container, .search-modal, .searchinput-box'))
+                                                                                              return 'search';
+      if (cl('sidebar-filter-form, filter-remove, .facets-bar-wrapper, .collection-facets-bar, [class*="facet"], .sortby-dropdown, .sortby-filter-box'))
+                                                                                              return 'collection_filters';
+      if (cl('[class*="pagination"], infinite-scroll'))                                        return 'pagination';
+      if (cl('media-gallery, .main-product-images, .product-images-wrapper, .product__media-wrapper, .main-product-slider, .product-slider-thumbnail, .product-media-popup-btn, .product-slide-box'))
+                                                                                              return 'pdp_gallery';
+      if (cl('product-form, .main-product-form, .main-product-content, .featured-product-content, variant-radios, quantity-input, .add-to-cart-btn, .item-checkout-buttons, .product-variants-options-details'))
+                                                                                              return 'pdp_purchase_area';
+      if (cl('.side-drawer-modal, .modal-drawer-panel, .quickview, [class*="popup"], [class*="newsletter"], .modal'))
+                                                                                              return 'account_popup';
+      // Real above-the-fold banner only. Contract value - see header comment.
+      if (cl('.section-hero-banner, .hero-media-wrapper, .hero-media-card, .hero-media-inner'))
+                                                                                              return 'hero_banner';
+      // [P1] Everything else that is a slider is a carousel, not a banner.
+      if (cl('[class*="flickity"], .slider-wrapper, .slider-dots, .product_card'))             return 'carousel';
+      return moduleFromAiBlock(element) || moduleFromSection(element) || 'unknown';
+    } catch (e) { return 'unknown'; }
+  };
+
+  function getInteractionType(element) {
+    if (!element) return 'click';
+    try {
+      if (element.tagName === 'A' || safeMatchesSelector(element, 'a')) return 'link';
+      if (element.tagName === 'BUTTON' || safeMatchesSelector(element, 'button') ||
+          element.getAttribute('role') === 'button') return 'button';
+      if (element.tagName === 'SUMMARY') return 'accordion';
+      if (element.tagName === 'INPUT') {
+        var inputType = element.getAttribute('type');
+        if (inputType === 'submit' || inputType === 'button') return 'button';
+        if (inputType === 'checkbox' || inputType === 'radio') return 'filter_' + inputType;
+      }
+      if (element.tagName === 'SELECT') return 'select';
+    } catch (e) {}
+    return 'click';
+  }
+
+  function getCustomDataAttributes(element) {
+    if (!element) return {};
+    var customData = {};
+    try {
+      var attributes = element.attributes;
+      for (var i = 0; i < attributes.length; i++) {
+        var attr = attributes[i];
+        if (attr.name.indexOf('data-ga-') === 0) {
+          var dataLayerKey = attr.name.replace('data-ga-', '').replace(/-/g, '_');
+          customData[dataLayerKey] = attr.value;
+        }
+      }
+    } catch (e) {}
+    return customData;
+  }
+
+  // Use the normalised class list so the key stays stable across renders.
+  function generateClickId(element, timestamp) {
+    var key = cleanElementId(element.id) || cleanClassName(element.className) || element.tagName;
+    return key + '_' + timestamp;
+  }
+
+  function handleClick(event) {
+    try {
+      var target = event.target || event.srcElement;
+      if (!target || target === document.body) return;
+
+      var interactiveElement = target;
+      var isClickable = false;
+
+      while (interactiveElement && interactiveElement !== document.body) {
+        if (interactiveElement.tagName === 'A' ||
+            interactiveElement.tagName === 'BUTTON' ||
+            interactiveElement.tagName === 'SUMMARY' ||
+            (interactiveElement.getAttribute && interactiveElement.getAttribute('role') === 'button') ||
+            isInWhitelist(interactiveElement)) {
+            isClickable = true;
+            break;
+        }
+        interactiveElement = interactiveElement.parentElement;
+      }
+
+      if (!isClickable || !interactiveElement) return;
+      if (isInBlacklist(interactiveElement)) return;
+
+      var timestamp = new Date().getTime();
+      var clickId = generateClickId(interactiveElement, timestamp);
+      if (processedClicks[clickId]) return;
+      processedClicks[clickId] = timestamp;
+      setTimeout(function() { delete processedClicks[clickId]; }, 1000);
+
+      var customData = getCustomDataAttributes(interactiveElement);
+
+      var rawText = customData.action_name || safeGetElementText(interactiveElement);
+      var actionNameFormatted = cleanText(rawText);
+      if (!actionNameFormatted) {
+        actionNameFormatted = 'btn_click';
+      }
+
+      var module = customData.module || window.dlIdentifyModule(interactiveElement);
+      var interactionType = customData.interaction_type || getInteractionType(interactiveElement);
+
+      // Do not produce "click_click".
+      var suffix = (interactionType === 'click') ? '' : '_click';
+
+      var eventData = {
+        'event': 'click_interaction',
+        'user_interaction_type': customData.user_interaction_type || (interactionType + suffix),
+        'action_name': actionNameFormatted,
+        'module': module,
+        // [P4] normalised - see normalizeToken()
+        'element_id': customData.element_id || cleanElementId(interactiveElement.id),
+        'element_classes': customData.element_classes || cleanClassName(interactiveElement.className),
+        'device_category': customData.device_category || getDeviceCategory()
+      };
+
+      // Always emit click_url, even when it resolves to nothing.
+      //
+      // GTM's data layer model is CUMULATIVE: a push that omits a key leaves
+      // the previous event's value standing. The old code only set click_url
+      // when the element had a link, so a button click (add to cart, quantity,
+      // filter, slider arrow, menu accordion) inherited whatever URL the last
+      // link click had left behind - and CJS - click_product_name then derived
+      // a product handle from it. Well-formed, plausible, and wrong.
+      var resolvedUrl = interactiveElement.href || getLinkOf(interactiveElement);
+      eventData.click_url = customData.click_url || resolvedUrl || '';
+
+      for (var key in customData) {
+        if (customData.hasOwnProperty(key) && !eventData.hasOwnProperty(key)) {
+          eventData[key] = customData[key];
+        }
+      }
+
+      log('click event:', eventData);
+      window.dataLayer.push(eventData);
+
+    } catch (e) { log('click handler error:', e); }
+  }
+
+  function safeAddEventListener(element, eventType, handler) {
+    if (!element) return;
+    try {
+      if (element.addEventListener) {
+        element.addEventListener(eventType, handler, true);
+      } else if (element.attachEvent) {
+        element.attachEvent('on' + eventType, handler);
+      }
+    } catch (e) {}
+  }
+
+  function initClickTracking() {
+    log('attaching listeners');
+    try {
+      safeAddEventListener(document, 'click', handleClick);
+    } catch (e) { log('init error:', e); }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initClickTracking);
+  } else {
+    initClickTracking();
+  }
+})();
+</script>

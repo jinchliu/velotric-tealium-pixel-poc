@@ -1,0 +1,560 @@
+<script>
+// ============================================================================
+// Modesees - link tracking, v1 (2026-08-19)
+//
+// Ported from the Eco-Worthy link tracker v2 and retargeted at Shopify's
+// *Paris* theme. See click-interaction-tracker.html for the full list of
+// porting notes [P1]-[P7]; this file carries the same module chain verbatim.
+//
+// Two things are specific to this tag:
+//
+//   [L1] internalDomains now lists modesees, not eco-worthy. Getting this
+//        wrong does not raise an error - it silently reclassifies every
+//        on-site link as `external`.
+//
+//   [L2] This tag fires on Initialization while the click tag fires on Page
+//        View, so this file always runs first. It therefore DEFINES
+//        window.dlIdentifyModule (guarded), and the click tag overwrites it
+//        with an identical implementation moments later. The two copies must
+//        stay byte-identical - a divergence would mean module values differ
+//        depending on how early the visitor clicks.
+//
+// Note that <a> clicks fire BOTH this tag's link_interaction and the click
+// tag's click_interaction. That double-push is inherited from Eco-Worthy and
+// is intentional.
+// ============================================================================
+(function() {
+  var debug_mode = true;
+
+  function log() {
+    if (debug_mode && window.console) {
+      var args = Array.prototype.slice.call(arguments);
+      args.unshift('[link tracking]');
+      console.log.apply(console, args);
+    }
+  }
+
+  window.dataLayer = window.dataLayer || [];
+  var processedLinks = {};
+  var currentDomain = '';
+  try { currentDomain = window.location.hostname; } catch (e) {}
+
+  var config = {
+    enablePageSourceParam: false, // rewrite hrefs to append page_source
+
+    whitelist: [
+      'a', '[role="link"]',
+      '.site-nav-link', '.site-nav-item a', '.header-icons-item a',
+      '.product-name', '.product-card a', '.product-media-card a', '.media-image a',
+      '.hero-media-card a', '.footer-navi-column a', '.footer-logo',
+      '.social-icons-link', '.logo-image', '.quick-view-icon',
+      '.product-media-popup-btn', '.facets-mobile-toggle',
+      '[data-ga-track]', '[data-ga-action-name]', '[data-ga-module]'
+    ],
+    blacklist: [
+      '.no-track', '.js-no-track', '[data-no-track]',
+      '[href="#"]', '[href="javascript:void(0)"]', '[href="javascript:;"]',
+      '[data-ga-track="false"]'
+    ],
+    // [L1] modesees, not eco-worthy.
+    internalDomains: [
+      'modesees.com',
+      'www.modesees.com',
+      'yxz5tg-xz.myshopify.com'
+    ],
+    trackOnlyTypes: [
+      'external', 'tel', 'mailto', 'anchor', 'javascript'
+    ]
+  };
+
+  var GENERIC_ARIA = /^(\s*\d+\s*[\/\\|]\s*\d+\s*|go to slide.*|next slide|previous slide|next|prev|previous|slide \d+.*|\d+)$/i;
+  var HAS_WORD = /[a-zA-Z0-9一-龥]/;
+  var MAX_ACTION_NAME_LEN = 80;
+
+  function getDeviceCategory() {
+    var width = window.innerWidth;
+    if (width < 768) return 'mobile';
+    if (width < 1024) return 'tablet';
+    return 'desktop';
+  }
+
+  function cleanText(text) {
+    if (!text) return '';
+    var s = String(text)
+      .replace(/[^a-zA-Z0-9_一-龥\- ]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (s.length > MAX_ACTION_NAME_LEN) {
+      s = s.slice(0, MAX_ACTION_NAME_LEN).replace(/\s+\S*$/, '');
+    }
+    return s;
+  }
+
+  function safeMatchesSelector(element, selector) {
+    if (!element || !selector || element.nodeType !== 1) return false;
+    try {
+      if (typeof element.matches === 'function') return element.matches(selector);
+      var matchesMethod = element.matches || element.webkitMatchesSelector || element.msMatchesSelector;
+      if (matchesMethod) return matchesMethod.call(element, selector);
+    } catch (e) {}
+    return false;
+  }
+
+  function safeClosest(element, selector) {
+    if (!element || element.nodeType !== 1) return null;
+    try {
+      if (typeof element.closest === 'function') return element.closest(selector);
+      var el = element;
+      while (el && el.nodeType === 1) {
+        if (safeMatchesSelector(el, selector)) return el;
+        el = el.parentElement;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function isInWhitelist(element) {
+    if (!config.whitelist || !config.whitelist.length) return true;
+    try {
+      for (var i = 0; i < config.whitelist.length; i++) {
+        if (safeMatchesSelector(element, config.whitelist[i])) return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  function isInBlacklist(element) {
+    if (!config.blacklist || !config.blacklist.length) return false;
+    try {
+      for (var i = 0; i < config.blacklist.length; i++) {
+        if (safeMatchesSelector(element, config.blacklist[i])) return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  // ==========================================================================
+  // [L2] Module identification - byte-identical to click-interaction-tracker.html
+  // ==========================================================================
+  function looksHashed(token) {
+    if (!token || token.length < 6) return false;
+    var t = token.replace(/^[A-Z]/, '');
+    return /[a-z]/.test(t) && /[A-Z]/.test(t);
+  }
+
+  function normalizeToken(token) {
+    if (typeof token !== 'string' || !token) return '';
+    var t = token;
+    t = t.replace(/[-_][a-z0-9]*aigenblock[a-z0-9]*$/i, '');
+    t = t.replace(/[-_]{1,2}(template|sections)--\d+__.*$/i, '');
+    t = t.replace(/^shopify-block-[A-Za-z0-9]+__/, '');
+    t = t.replace(/^shopify-section-/, '');
+    t = t.replace(/[-_]\d{8,}(?=[-_]|$)/g, '');
+    for (var i = 0; i < 3; i++) {
+      var m = /^(.*)[-_]([A-Za-z0-9]+)$/.exec(t);
+      if (!m) break;
+      var tail = m[2];
+      if (looksHashed(tail) || /^\d{6,}$/.test(tail)) { t = m[1]; } else { break; }
+    }
+    if (/^[0-9a-f]{8,}$/i.test(t) || /^\d+$/.test(t)) return '';
+    return t;
+  }
+
+  var SECTION_MODULE_MAP = {
+    'header':            'header_menu',
+    'announcement-bar':  'announcement_bar',
+    'footer':            'footer',
+    'slideshow':         'hero_banner',
+    'banner':            'hero_banner',
+    'featured_collection': 'product_list',
+    'related-products':  'product_recommendations',
+    'main-collection':   'collection_grid',
+    'main':              'pdp_main',
+    'images_carousel':   'carousel',
+    'breadcrumb':        'breadcrumb',
+    'blocks':            'content_block',
+    'rich_text':         'content_block',
+    'newsletter-popup':  'account_popup',
+    'age-verification-popup': 'account_popup'
+  };
+
+  var AI_BLOCK_MODULE_MAP = {
+    'icon-features':    'icon_features',
+    'category-grid':    'category_grid',
+    'customer-reviews': 'customer_reviews',
+    'triple-banner':    'promo_tiles'
+  };
+
+  function moduleFromAiBlock(element) {
+    try {
+      var el = element;
+      while (el && el.nodeType === 1) {
+        var tag = (el.tagName || '').toLowerCase();
+        if (tag.indexOf('aigenblock') !== -1) {
+          var semantic = tag.split(/-?[a-z0-9]*aigenblock/)[0].replace(/-a[a-z0-9]*$/, '');
+          if (AI_BLOCK_MODULE_MAP[semantic]) return AI_BLOCK_MODULE_MAP[semantic];
+          var norm = semantic.replace(/[-\s]+/g, '_').toLowerCase();
+          return /^[0-9a-f_]+$/.test(norm) ? null : norm;
+        }
+        el = el.parentElement;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function moduleFromSection(element) {
+    try {
+      var sec = safeClosest(element, '[id^="shopify-section"]');
+      if (!sec || !sec.id) return null;
+      var raw = sec.id
+        .replace(/^shopify-section-/, '')
+        .replace(/^template--\d+__/, '')
+        .replace(/^sections--\d+__/, '');
+      if (!raw) return null;
+      if (SECTION_MODULE_MAP[raw]) return SECTION_MODULE_MAP[raw];
+      var norm = normalizeToken(raw);
+      if (SECTION_MODULE_MAP[norm]) return SECTION_MODULE_MAP[norm];
+      if (!norm) return null;
+      return norm.replace(/[-\s]+/g, '_').toLowerCase();
+    } catch (e) { return null; }
+  }
+
+  if (typeof window.dlIdentifyModule !== 'function') {
+    window.dlIdentifyModule = function(element) {
+      if (!element) return 'unknown';
+      function cl(sel) { return safeClosest(element, sel); }
+      try {
+        if (cl('header.header, .header-section, .main-header-top, nav.nav-main-wrapper, #mobile-nav-menu, .drawer-mobile-menu, .site-nav-item, .header-icons-item, .navbar')) {
+          return cl('.nav-grandmenu, .mega-menu, [class*="mega"]') ? 'mega_menu' : 'header_menu';
+        }
+        if (cl('footer.footer, #shopify-section-footer, .footer-inner-wrapper, .footer-navi-menus, .footer-logo-box, .footer-newsletter'))
+                                                                                                return 'footer';
+        if (cl('.announcement-wrapper, .announcement-inner-card, .announcement-bar-carousel'))   return 'announcement_bar';
+        if (cl('.jdgm-widget, .jdgm-rev-widg, .jdgm-tab, .jdgm-write-review-btn, .jdgm-write-review-modal, .jdgm-modal, [class*="jdgm-"]'))
+                                                                                                return 'product_reviews';
+        if (cl('[class*="cbb-frequently-bought"], [class*="cbb-recommendations"]'))              return 'frequently_bought';
+        if (cl('product-card, .product-card, .product-card-inner, quick-view, .quick-view-element'))
+                                                                                                return 'product_list';
+        if (cl('cart-drawer, mini-cart, cart-items, .minicart-panel, .cart-drawer-empty, #minicart'))
+                                                                                                return 'cart_drawer';
+        if (cl('predictive-search, .predictive-search-main, .predictive-search-container, .search-modal, .searchinput-box'))
+                                                                                                return 'search';
+        if (cl('sidebar-filter-form, filter-remove, .facets-bar-wrapper, .collection-facets-bar, [class*="facet"], .sortby-dropdown, .sortby-filter-box'))
+                                                                                                return 'collection_filters';
+        if (cl('[class*="pagination"], infinite-scroll'))                                        return 'pagination';
+        if (cl('media-gallery, .main-product-images, .product-images-wrapper, .product__media-wrapper, .main-product-slider, .product-slider-thumbnail, .product-media-popup-btn, .product-slide-box'))
+                                                                                                return 'pdp_gallery';
+        if (cl('product-form, .main-product-form, .main-product-content, .featured-product-content, variant-radios, quantity-input, .add-to-cart-btn, .item-checkout-buttons, .product-variants-options-details'))
+                                                                                                return 'pdp_purchase_area';
+        if (cl('.side-drawer-modal, .modal-drawer-panel, .quickview, [class*="popup"], [class*="newsletter"], .modal'))
+                                                                                                return 'account_popup';
+        if (cl('.section-hero-banner, .hero-media-wrapper, .hero-media-card, .hero-media-inner'))
+                                                                                                return 'hero_banner';
+        if (cl('[class*="flickity"], .slider-wrapper, .slider-dots, .product_card'))             return 'carousel';
+        return moduleFromAiBlock(element) || moduleFromSection(element) || 'unknown';
+      } catch (e) { return 'unknown'; }
+    };
+  }
+
+  function getCustomDataAttributes(element) {
+    if (!element) return {};
+    var customData = {};
+    try {
+      var attributes = element.attributes;
+      for (var i = 0; i < attributes.length; i++) {
+        var attr = attributes[i];
+        if (attr.name.indexOf('data-ga-') === 0) {
+          var dataLayerKey = attr.name.replace('data-ga-', '').replace(/-/g, '_');
+          customData[dataLayerKey] = attr.value;
+        }
+      }
+    } catch (e) {}
+    return customData;
+  }
+
+  // Shopify path taxonomy. /blogs/ is kept even though this storefront has no
+  // blog today - it costs nothing and works if one is added.
+  function getLinkType(href) {
+    if (!href) return 'unknown';
+    try {
+      if (href.indexOf('tel:') === 0) return 'tel';
+      if (href.indexOf('mailto:') === 0) return 'mailto';
+      if (href.indexOf('#') === 0 && href.length > 1) return 'anchor';
+      if (href === '#') return 'placeholder';
+      if (href.indexOf('javascript:') === 0) return 'javascript';
+
+      var isExternal = false;
+      if (href.indexOf('http') === 0 || href.indexOf('//') === 0) {
+        var tempA = document.createElement('a');
+        tempA.href = href;
+        isExternal = tempA.hostname !== currentDomain;
+        for (var i = 0; i < config.internalDomains.length; i++) {
+          if (tempA.hostname.indexOf(config.internalDomains[i]) !== -1) {
+            isExternal = false;
+            break;
+          }
+        }
+      }
+      if (isExternal) return 'external';
+
+      if (href.indexOf('/products/') !== -1) return 'product';
+      if (href.indexOf('/collections/') !== -1) return 'collection';
+      if (href.indexOf('/cart') !== -1) return 'cart';
+      if (href.indexOf('/account') !== -1) return 'account';
+      if (href.indexOf('/search') !== -1) return 'search';
+      if (href.indexOf('/pages/') !== -1) return 'page';
+      if (href.indexOf('/blogs/') !== -1) return 'blog';
+      return 'internal';
+    } catch (e) { return 'unknown'; }
+  }
+
+  function isTrackOnlyType(linkType) {
+    try {
+      for (var i = 0; i < config.trackOnlyTypes.length; i++) {
+        if (config.trackOnlyTypes[i] === linkType) return true;
+      }
+    } catch (e) { return true; }
+    return false;
+  }
+
+  function stripNoise(element, selectors) {
+    var c = element.cloneNode(true);
+    for (var i = 0; i < selectors.length; i++) {
+      try {
+        var nodes = c.querySelectorAll(selectors[i]);
+        for (var j = 0; j < nodes.length; j++) {
+          if (nodes[j].parentNode) nodes[j].parentNode.removeChild(nodes[j]);
+        }
+      } catch (e) {}
+    }
+    return (c.textContent || '').trim();
+  }
+
+  function getOwnText(element) {
+    try {
+      var base = ['script', 'style', 'noscript',
+                  '.price-wrapper', '.item-price', '.item-price-old',
+                  '.badge-card', '.badge-item', '.jdgm-widget', '.jdgm-prev-badge',
+                  '.quick-view-loader', '.loader-image', '.cart-total-count'];
+      // Strip accessibility text first; if that empties the node it was an
+      // icon link and the a11y text is its only label (e.g. "Facebook").
+      var t = stripNoise(element, base.concat(['.visually-hidden', '.sr-only']));
+      if (HAS_WORD.test(t)) return t;
+      return stripNoise(element, base);
+    } catch (e) {
+      return (element.textContent || '').trim();
+    }
+  }
+
+  function slugToText(url) {
+    try {
+      var p = new URL(url, location.href).pathname.split('/').filter(Boolean).pop() || '';
+      return p.replace(/[-_]+/g, ' ').trim();
+    } catch (e) { return ''; }
+  }
+
+  function getLinkActionName(link) {
+    if (!link) return '';
+    try {
+      var manual = link.getAttribute('data-ga-action-name');
+      if (manual && manual.trim()) return manual.trim();
+
+      var head = link.querySelector('.product-name, .product-title-wrapper, h1, h2, h3, h4, h5, h6');
+      if (head) {
+        var ht = (head.textContent || '').trim();
+        if (HAS_WORD.test(ht)) return ht;
+      }
+
+      var t = getOwnText(link);
+      if (HAS_WORD.test(t)) return t;
+
+      var attr = link.getAttribute('aria-label') || link.getAttribute('title');
+      if (attr && attr.trim() && !GENERIC_ARIA.test(attr.trim())) return attr.trim();
+
+      var img = link.querySelector('img');
+      var alt = img && img.getAttribute('alt');
+      if (alt && HAS_WORD.test(alt)) return alt.trim();
+
+      var parent = link.parentElement;
+      if (parent) {
+        var cardHeading = parent.querySelector('.product-name, .product-title-wrapper, h6');
+        if (cardHeading) {
+          var ct = (cardHeading.textContent || '').trim();
+          if (HAS_WORD.test(ct)) return ct;
+        }
+      }
+
+      var href = link.getAttribute('href') || '';
+      if (safeMatchesSelector(link, '.logo-image, .footer-logo, [class*="logo"]')) return 'Brand Logo';
+      if (safeMatchesSelector(link, '.search-icon a, a.search'))   return 'Search Icon';
+      if (safeMatchesSelector(link, '.account-icon a, a.user'))    return 'Account Icon';
+      if (safeMatchesSelector(link, '.cart-icon a, a.cart'))       return 'Cart Icon';
+      if (safeMatchesSelector(link, '[class*="social"]') && link.href) {
+        try { return 'Social ' + new URL(link.href).hostname.replace(/^www\./, '').split('.')[0]; } catch (e) {}
+      }
+      if (href.indexOf('mailto:') === 0) return href.replace('mailto:', '');
+      if (href.indexOf('tel:') === 0)    return href.replace('tel:', '');
+
+      var slug = slugToText(href);
+      if (HAS_WORD.test(slug)) return slug;
+
+      return 'Image Link';
+    } catch (e) { return ''; }
+  }
+
+  // ==========================================================================
+  // Delegated listener; every field is computed at click time, never frozen.
+  // ==========================================================================
+  function handleLinkClick(event) {
+    try {
+      var target = event.target || event.srcElement;
+      if (!target || target.nodeType !== 1) return;
+
+      var link = safeClosest(target, 'a[href], [role="link"][href]');
+      if (!link) return;
+      if (isInBlacklist(link)) return;
+      if (!isInWhitelist(link)) return;
+
+      var href = link.getAttribute('href') || '';
+
+      var dedupKey = href + '|' + (link.id || '');
+      var now = new Date().getTime();
+      if (processedLinks[dedupKey] && (now - processedLinks[dedupKey]) < 500) return;
+      processedLinks[dedupKey] = now;
+
+      var customData = getCustomDataAttributes(link);
+
+      var module = customData.module || window.dlIdentifyModule(link);
+      var linkType = customData.link_type || getLinkType(href);
+      var actionName = customData.action_name || cleanText(getLinkActionName(link)) || 'link';
+
+      var eventData = {
+        'event': customData.event || 'link_interaction',
+        'user_interaction_type': customData.user_interaction_type || 'link_click',
+        'action_name': actionName,
+        'module': module,
+        'click_url': customData.click_url || href,
+        'link_type': linkType,
+        'device_category': customData.device_category || getDeviceCategory()
+      };
+
+      for (var key in customData) {
+        if (customData.hasOwnProperty(key) && !eventData.hasOwnProperty(key)) {
+          eventData[key] = customData[key];
+        }
+      }
+
+      log('link event:', eventData);
+      window.dataLayer.push(eventData);
+    } catch (e) { log('link handler error:', e); }
+  }
+
+  // ==========================================================================
+  // page_source URL decoration (only when enablePageSourceParam is true).
+  // Tracking itself does not depend on it.
+  // ==========================================================================
+  function hasPageSourceParam(url) {
+    if (!url) return false;
+    try { return url.indexOf('page_source=') !== -1; } catch (e) { return false; }
+  }
+
+  function addUrlParameter(url, paramName, paramValue) {
+    if (!url || !paramName || !paramValue) return url;
+    try {
+      var tempA = document.createElement('a');
+      tempA.href = url;
+      var search = tempA.search;
+      var hash = tempA.hash;
+      if (search.indexOf('#') !== -1) search = search.substring(0, search.indexOf('#'));
+
+      var params = {};
+      if (search.length > 1) {
+        var parts = search.substring(1).split('&');
+        for (var i = 0; i < parts.length; i++) {
+          var pair = parts[i].split('=');
+          params[decodeURIComponent(pair[0])] = pair.length > 1 ? decodeURIComponent(pair[1]) : '';
+        }
+      }
+      params[paramName] = paramValue;
+
+      var newSearch = '?';
+      var first = true;
+      for (var key in params) {
+        if (params.hasOwnProperty(key)) {
+          if (!first) newSearch += '&';
+          first = false;
+          newSearch += encodeURIComponent(key) + '=' + encodeURIComponent(params[key]);
+        }
+      }
+      return tempA.protocol + '//' + tempA.host + tempA.pathname + newSearch + hash;
+    } catch (e) { return url; }
+  }
+
+  function decorateLinks() {
+    if (!config.enablePageSourceParam) return;
+    try {
+      var links = document.querySelectorAll('a[href]:not([data-tracking-decorated])');
+      for (var i = 0; i < links.length; i++) {
+        var link = links[i];
+        var href = link.getAttribute('href');
+        if (isInBlacklist(link)) { link.setAttribute('data-tracking-decorated', 'blacklisted'); continue; }
+
+        var customData = getCustomDataAttributes(link);
+        var linkType = customData.link_type || getLinkType(href);
+        var module = customData.module || window.dlIdentifyModule(link);
+        var actionName = customData.action_name || cleanText(getLinkActionName(link)) || 'link';
+        var pageSource = customData.page_source || (module + '|' + actionName);
+
+        link.setAttribute('data-tracking-decorated', 'true');
+        if (!isTrackOnlyType(linkType) && !hasPageSourceParam(href)) {
+          try { link.setAttribute('href', addUrlParameter(href, 'page_source', pageSource)); } catch (e) {}
+        }
+      }
+    } catch (e) { log('decorate error:', e); }
+  }
+
+  var decorateTimer = null;
+  function scheduleDecorate() {
+    if (!config.enablePageSourceParam) return;
+    if (decorateTimer) return;
+    decorateTimer = setTimeout(function() { decorateTimer = null; decorateLinks(); }, 300);
+  }
+
+  function initLinkTracking() {
+    log('init' + (config.enablePageSourceParam ? ' with page_source decoration' : ' (decoration off)'));
+
+    if (document.addEventListener) {
+      document.addEventListener('click', handleLinkClick, true);
+    } else if (document.attachEvent) {
+      document.attachEvent('onclick', handleLinkClick);
+    }
+
+    decorateLinks();
+
+    if (config.enablePageSourceParam) {
+      var MutationObserver = window.MutationObserver || window.WebKitMutationObserver;
+      if (MutationObserver) {
+        try {
+          var observer = new MutationObserver(function(mutations) {
+            for (var i = 0; i < mutations.length; i++) {
+              if (mutations[i].type === 'childList' && mutations[i].addedNodes.length > 0) {
+                scheduleDecorate();
+                break;
+              }
+            }
+          });
+          observer.observe(document.body, { childList: true, subtree: true });
+        } catch (e) { setInterval(decorateLinks, 3000); }
+      } else {
+        setInterval(decorateLinks, 3000);
+      }
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initLinkTracking);
+  } else {
+    initLinkTracking();
+  }
+})();
+</script>
