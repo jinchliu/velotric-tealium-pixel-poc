@@ -35,11 +35,11 @@ const config = {
 
 // Stape's "Container loading path": serves the loader script and receives the
 // store_cookies POST — see sendStoreCookies(). Same URL in theme-liquid.html.
-const STAPE_CONTAINER_LOADING_PATH = 'https://qbgxbxdc.usb.stape.io';
+const STAPE_CONTAINER_LOADING_PATH = 'https://load.securedata.modesees.com';
 // Generated as a pair by the Custom Loader power-up, and only valid as a pair:
 // the query string encodes the web container ID, and the path alone 404s.
 const STAPE_LOADER_SCRIPT_NAME = '28eqbgxbxdc.js';
-const STAPE_LOADER_QUERY_STRING = '3fev=CgBFJSwqTzonXTooLlJWVxVZSkxJQQYfXhcMAwgCTBgM';
+const STAPE_LOADER_QUERY_STRING = '3fev=CgBFJSwqTzonXTooLlJWVxVZSkxJQQYfXgkXBh0UBxQQShsNFQ%3D%3D';
 const STAPE_LOADER_SCRIPT_URL = `${STAPE_CONTAINER_LOADING_PATH}/${STAPE_LOADER_SCRIPT_NAME}`;
 
 // 由 Shopify 插件（Stape Conversion Tracking）生成
