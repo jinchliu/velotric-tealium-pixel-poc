@@ -1,8 +1,9 @@
 <script>
 // ============================================================================
-// Modesees and Chicnery - site-wide click tracking
-// Chicnery uses a hostname-scoped Fashionopolism 11.1.0 adapter. Paris rules
-// remain the fallback for Modesees. GTM Custom HTML requires ES5 syntax here.
+// Modesees, Chicnery, Crovaya and ElevenOra - site-wide click tracking
+// Paris rules remain the Modesees fallback. Hostname-scoped adapters support
+// Fashionopolism (Chicnery), Symmetry (Crovaya) and Align (ElevenOra).
+// GTM Custom HTML requires ES5 syntax here.
 //
 // Ported from the Eco-Worthy tracker v3 and retargeted at Shopify's *Paris*
 // theme (theme_store_id 2702, schema 1.2.0). Almost none of the Dawn
@@ -120,6 +121,23 @@
   };
 
   var processedClicks = {};
+
+  if (isElevenOraStorefront()) {
+    config.whitelist = config.whitelist.concat([
+      '.main-product__variant-selector input[type="radio"]',
+      '.main-product__variant-selector label.swatch',
+      '.main-product__variant-selector label.button--pill',
+      '.main-product__gallery-item'
+    ]);
+  }
+
+  if (isCrovayaStorefront()) {
+    config.whitelist = config.whitelist.concat([
+      '.opt-btn', '.opt-label', '.filter-group__checkbox',
+      '.filter-toggle__input', 'label.filter-group__item',
+      'label.filter-toggle__input-label'
+    ]);
+  }
 
   // Only Fashionopolism's actionable controls belong in this extension.
   // Text fields remain excluded by the existing blacklist.
@@ -328,7 +346,7 @@
       var manual = element.getAttribute('data-ga-action-name');
       if (manual && manual.trim()) return manual.trim();
 
-      var storefrontText = getChicneryActionName(element);
+      var storefrontText = getElevenOraActionName(element) || getCrovayaActionName(element) || getChicneryActionName(element);
       if (storefrontText) return storefrontText;
 
       var head = element.querySelector(
@@ -470,6 +488,136 @@
   // --------------------------------------------------------------------------
 
   // Store-specific selectors must never change the Paris classification.
+
+  // Align selectors apply only to ElevenOra and its Shopify alias.
+  function isElevenOraStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)elevenora\.com$/.test(hostname) ||
+        hostname === 'pnz00w-e1.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyElevenOraModule(element) {
+    if (!isElevenOraStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('#mini-cart, .mini-cart')) return 'cart_drawer';
+    if (cl('.nav--mobile')) return 'mobile_menu';
+    if (cl('.announcement-bar')) return 'announcement_bar';
+    if (cl('.main-navigation')) return 'header_menu';
+    if (cl('.shopify-section-group-main-footer')) return 'footer';
+    if (cl('.jdgm-widget, .jdgm-rev-widg, [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('.main-product__media, .main-product__media-wrapper')) return 'pdp_gallery';
+    if (cl('.card--product')) return 'product_list';
+    if (cl('facet-filters-form, .facet-form')) return 'collection_filters';
+    if (cl('.main-product__content, .main-product__blocks')) return 'pdp_purchase_area';
+    var banner = cl('.shopify-section.banner');
+    if (banner) {
+      // Only the first standalone banner is the homepage hero.
+      return banner === document.querySelector('main .shopify-section.banner')
+        ? 'hero_banner' : 'promo_banner';
+    }
+    if (cl('.grid-content .banner__wrapper')) return 'category_grid';
+    if (cl('swiper-container, .swiper-pagination, .grid-content')) return 'carousel';
+    if (cl('.shopify-section.collection')) return 'collection_grid';
+    return null;
+  }
+
+  function getElevenOraActionName(element) {
+    if (!isElevenOraStorefront()) return '';
+    if (safeMatchesSelector(element, 'a') && element.querySelector('.header__logo')) return 'Brand Logo';
+    if (safeMatchesSelector(element, '.main-product__variant-selector input[type="radio"]')) return element.value || '';
+    if (safeMatchesSelector(element, '.quantity button[name="plus"]')) return 'Qty Plus';
+    if (safeMatchesSelector(element, '.quantity button[name="minus"]')) return 'Qty Minus';
+    if (safeMatchesSelector(element, 'button[name="add"].button--add-to-cart')) return 'Add to cart';
+    if (safeMatchesSelector(element, '.swiper-button-next')) return 'Next Slide';
+    if (safeMatchesSelector(element, '.swiper-button-prev')) return 'Previous Slide';
+    if (safeMatchesSelector(element, '.swiper-pagination-bullet')) {
+      var page = /go to slide\s+(\d+)/i.exec(element.getAttribute('aria-label') || '');
+      if (page) {
+        return safeClosest(element, '.main-product__media')
+          ? 'Product Image ' + page[1] : 'Slide ' + page[1];
+      }
+    }
+    if (safeMatchesSelector(element, '.main-product__gallery-item')) {
+      var slides = element.parentElement && element.parentElement.querySelectorAll('swiper-slide');
+      if (slides) return 'Product Image ' + (Array.prototype.indexOf.call(slides, element) + 1);
+    }
+    var card = safeClosest(element, '.card--product');
+    if (card && safeMatchesSelector(element, 'a')) {
+      var image = card.querySelector('.card__image img[alt]');
+      var title = image && image.getAttribute('alt');
+      if (title && HAS_WORD.test(title)) return title.trim();
+      var linkTitle = element.getAttribute('title');
+      if (linkTitle) return linkTitle.replace(/^View\s+/i, '').trim();
+    }
+    // Material icon ligatures are implementation text, not action labels.
+    if (safeMatchesSelector(element, 'button, [role="button"]') && element.querySelector('.icon')) {
+      var clone = element.cloneNode(true);
+      var icons = clone.querySelectorAll('.icon');
+      for (var i = 0; i < icons.length; i++) {
+        if (icons[i].parentNode) icons[i].parentNode.removeChild(icons[i]);
+      }
+      var text = (clone.textContent || '').trim();
+      if (HAS_WORD.test(text)) return text;
+    }
+    return '';
+  }
+
+  // Symmetry selectors apply only to Crovaya and its Shopify alias.
+  function isCrovayaStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)crovaya\.com$/.test(hostname) ||
+        hostname === 'crovaya.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyCrovayaModule(element) {
+    if (!isCrovayaStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('cart-drawer, .cart-drawer')) return 'cart_drawer';
+    if (cl('.mobile-navigation-drawer')) return 'mobile_menu';
+    if (cl('.section-header, page-header, main-navigation')) return 'header_menu';
+    if (cl('.section-footer')) return 'footer';
+    if (cl('.section-announcement-bar, announcement-bar')) return 'announcement_bar';
+    if (cl('media-gallery, .product-media-wrapper')) return 'pdp_gallery';
+    if (cl('product-block, .product-block')) return 'product_list';
+    if (cl('.filter-group, .filter-toggle')) return 'collection_filters';
+    if (cl('.product-form, buy-buttons, variant-picker, sticky-atc')) return 'pdp_purchase_area';
+    var slideshow = cl('.section-slideshow');
+    if (slideshow) {
+      return slideshow === document.querySelector('main .section-slideshow')
+        ? 'hero_banner' : 'carousel';
+    }
+    if (cl('slide-show, carousel-slider')) return 'carousel';
+    return null;
+  }
+
+  function getCrovayaActionName(element) {
+    if (!isCrovayaStorefront()) return '';
+    if (safeMatchesSelector(element, '.logo__link')) return 'Brand Logo';
+    if (safeMatchesSelector(element, 'input.js-option')) return element.value || '';
+    if (safeMatchesSelector(element, '.filter-group__checkbox, .filter-toggle__input')) {
+      var label = safeClosest(element, 'label');
+      var caption = label && label.querySelector('.filter-group__item__text, .filter-toggle__input-label-text');
+      if (caption && HAS_WORD.test(caption.textContent || '')) return caption.textContent.trim();
+      return element.value || '';
+    }
+    if (safeMatchesSelector(element, 'a.thumbnail, a.show-gallery')) {
+      var item = safeClosest(element, '.slider__item');
+      if (item && item.parentElement) {
+        return 'Product Image ' + (Array.prototype.indexOf.call(item.parentElement.children, item) + 1);
+      }
+    }
+    var card = safeClosest(element, 'product-block, .product-block');
+    if (card && safeMatchesSelector(element, 'a.product-link')) {
+      var title = card.querySelector('.product-block__title');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    return '';
+  }
+
   function isChicneryStorefront() {
     try {
       var hostname = window.location.hostname.toLowerCase();
@@ -536,7 +684,7 @@
     if (!element) return 'unknown';
     function cl(sel) { return safeClosest(element, sel); }
     try {
-      var storefrontModule = identifyChicneryModule(element);
+      var storefrontModule = identifyElevenOraModule(element) || identifyCrovayaModule(element) || identifyChicneryModule(element);
       if (storefrontModule) return storefrontModule;
       // Header first. Paris nests <a> inside <summary> inside li.site-nav-item.
       if (cl('header.header, .header-section, .main-header-top, nav.nav-main-wrapper, #mobile-nav-menu, .drawer-mobile-menu, .site-nav-item, .header-icons-item, .navbar')) {
@@ -619,6 +767,25 @@
     try {
       var target = event.target || event.srcElement;
       if (!target || target === document.body) return;
+
+      // Align labels wrap their radio and forward a native control click.
+      if (isElevenOraStorefront() && !safeMatchesSelector(target, 'input')) {
+        var elevenOraLabel = safeClosest(target, '.main-product__variant-selector label.swatch, .main-product__variant-selector label.button--pill');
+        var elevenOraControlId = elevenOraLabel && elevenOraLabel.getAttribute('for');
+        var elevenOraControl = elevenOraLabel && ((elevenOraControlId && document.getElementById(elevenOraControlId)) ||
+          elevenOraLabel.querySelector('input[type="radio"]'));
+        if (elevenOraControl && !elevenOraControl.disabled && elevenOraControl.type === 'radio') return;
+      }
+
+      // Track the forwarded input event once for Symmetry's native labels,
+      // including labels that wrap their input instead of using a for value.
+      if (isCrovayaStorefront() && !safeMatchesSelector(target, 'input')) {
+        var crovayaLabel = safeClosest(target, 'label.opt-label, label.filter-group__item, label.filter-toggle__input-label');
+        var crovayaControlId = crovayaLabel && crovayaLabel.getAttribute('for');
+        var crovayaControl = crovayaLabel && ((crovayaControlId && document.getElementById(crovayaControlId)) ||
+          crovayaLabel.querySelector('input[type="radio"], input[type="checkbox"]'));
+        if (crovayaControl && !crovayaControl.disabled && /^(radio|checkbox)$/i.test(crovayaControl.type)) return;
+      }
 
       // Native labels forward a second click to their radio/checkbox. Track
       // that control event once, including keyboard activation.
