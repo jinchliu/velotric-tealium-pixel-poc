@@ -1,9 +1,9 @@
 <script>
 // ============================================================================
-// Modesees, Chicnery, Crovaya, ElevenOra, Futario and Gloeria - link tracking
+// Modesees, Chicnery, Crovaya, ElevenOra, Futario, Gloeria and Liserie - link tracking
 //
 // Paris rules remain the Modesees fallback. Hostname-scoped adapters support
-// Fashionopolism (Chicnery), Symmetry (Crovaya), Align (ElevenOra), Motion (Futario) and Palo Alto (Gloeria/Ginariel).
+// Fashionopolism (Chicnery), Symmetry (Crovaya), Align (ElevenOra), Motion (Futario), Palo Alto (Gloeria/Ginariel) and Prestige (Liserie).
 // GTM Custom HTML requires ES5 syntax here. Shared module and storefront label
 // helpers must match click-interaction-tracker.html.
 //
@@ -53,7 +53,8 @@
       ['crovaya.com', 'www.crovaya.com', 'crovaya.myshopify.com'],
       ['elevenora.com', 'www.elevenora.com', 'pnz00w-e1.myshopify.com'],
       ['futario.com', 'www.futario.com', '8636f9-95.myshopify.com'],
-      ['ginariel.com', 'www.ginariel.com', 'menalvin.myshopify.com']
+      ['ginariel.com', 'www.ginariel.com', 'menalvin.myshopify.com'],
+      ['liserie.com', 'www.liserie.com', '4hc40j-jr.myshopify.com']
     ];
     for (var i = 0; i < stores.length; i++) {
       for (var j = 0; j < stores[i].length; j++) {
@@ -241,6 +242,89 @@
 
 
   // Store-specific selectors must never change the Paris classification.
+
+  // Prestige selectors apply only to Liserie and its Shopify alias.
+  function isLiserieStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)liserie\.com$/.test(hostname) ||
+        hostname === '4hc40j-jr.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyLiserieModule(element) {
+    if (!isLiserieStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('cart-drawer')) return 'cart_drawer';
+    if (cl('header-sidebar')) return 'mobile_menu';
+    if (cl('header-search')) return 'search_panel';
+    if (cl('x-header, .shopify-section--header')) return 'header_menu';
+    if (cl('.shopify-section-group-footer-group')) return 'footer';
+    if (cl('.myrv, .jdgm-widget, [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('product-gallery, .pswp')) return 'pdp_gallery';
+    if (cl('.product-info, product-sticky-bar')) return 'pdp_purchase_area';
+    if (cl('product-card, quick-buy-modal')) return 'product_list';
+    if (cl('.collection-toolbar, facets-sort-popover')) return 'collection_filters';
+    var slideshow = cl('.shopify-section--slideshow');
+    if (slideshow) {
+      return slideshow === document.querySelector('main .shopify-section--slideshow')
+        ? 'hero_banner' : 'carousel';
+    }
+    if (cl('.shopify-section--collection-list')) return 'category_grid';
+    if (cl('.shopify-section--media-grid')) return 'promo_tiles';
+    if (cl('scroll-carousel, carousel-navigation, .shopify-section--featured-collections, .shopify-section--shop-the-look')) return 'carousel';
+    if (cl('.shopify-section--main-collection')) return 'collection_grid';
+    if (cl('.shopify-section--newsletter')) return 'newsletter';
+    return null;
+  }
+
+  function getLiserieActionName(element) {
+    if (!isLiserieStorefront()) return '';
+    if (safeMatchesSelector(element, 'a.header__logo')) return 'Brand Logo';
+    var navTitle = element.getAttribute('data-title');
+    if (navTitle && HAS_WORD.test(navTitle)) return navTitle.trim();
+    if (safeMatchesSelector(element, 'product-card input[type="radio"], variant-picker input[type="radio"]')) {
+      // Prestige stores numeric option IDs as values; use the visible label.
+      var label = element.nextElementSibling;
+      if (label && label.tagName === 'LABEL' && label.getAttribute('for') === element.id) {
+        var caption = (label.textContent || '').trim();
+        if (HAS_WORD.test(caption)) return caption;
+      }
+      return element.getAttribute('aria-label') || 'Variant';
+    }
+    if (safeMatchesSelector(element, '.quantity-selector__button')) {
+      var quantityText = element.textContent || '';
+      if (/increase/i.test(quantityText)) return 'Qty Plus';
+      if (/decrease/i.test(quantityText)) return 'Qty Minus';
+    }
+    if (safeMatchesSelector(element, '.product-gallery__thumbnail[data-media-position]')) {
+      return 'Product Image ' + element.getAttribute('data-media-position');
+    }
+    if (safeMatchesSelector(element, '.product-gallery__media[data-media-type="image"]')) {
+      var mediaPosition = /Item\s+(\d+)\s+of/i.exec(element.getAttribute('aria-label') || '');
+      if (mediaPosition) return 'Product Image ' + mediaPosition[1];
+    }
+    if (safeMatchesSelector(element, 'carousel-navigation button')) {
+      var page = /Go to item\s+(\d+)/i.exec(element.textContent || '');
+      if (page) return (safeClosest(element, 'product-gallery') ? 'Product Image ' : 'Slide ') + page[1];
+    }
+    if (safeMatchesSelector(element, '.product-card__quick-add-button')) return 'Choose options';
+    var card = safeClosest(element, 'product-card');
+    if (card && safeMatchesSelector(element, 'a[href*="/products/"]')) {
+      var title = card.querySelector('.product-title');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    if (safeMatchesSelector(element, 'a, button, summary, [role="button"]') && element.querySelector('svg')) {
+      var clone = element.cloneNode(true);
+      var icons = clone.querySelectorAll('svg');
+      for (var i = 0; i < icons.length; i++) {
+        if (icons[i].parentNode) icons[i].parentNode.removeChild(icons[i]);
+      }
+      var text = (clone.textContent || '').trim();
+      if (HAS_WORD.test(text)) return text;
+    }
+    return '';
+  }
 
   // Gloeria's configured storefront is Ginariel, using Palo Alto selectors.
   function isGloeriaStorefront() {
@@ -596,7 +680,7 @@
       if (!element) return 'unknown';
       function cl(sel) { return safeClosest(element, sel); }
       try {
-        var storefrontModule = identifyGloeriaModule(element) || identifyFutarioModule(element) || identifyElevenOraModule(element) || identifyCrovayaModule(element) || identifyChicneryModule(element);
+        var storefrontModule = identifyLiserieModule(element) || identifyGloeriaModule(element) || identifyFutarioModule(element) || identifyElevenOraModule(element) || identifyCrovayaModule(element) || identifyChicneryModule(element);
         if (storefrontModule) return storefrontModule;
         if (cl('header.header, .header-section, .main-header-top, nav.nav-main-wrapper, #mobile-nav-menu, .drawer-mobile-menu, .site-nav-item, .header-icons-item, .navbar')) {
           return cl('.nav-grandmenu, .mega-menu, [class*="mega"]') ? 'mega_menu' : 'header_menu';
@@ -733,7 +817,7 @@
       var manual = link.getAttribute('data-ga-action-name');
       if (manual && manual.trim()) return manual.trim();
 
-      var storefrontText = getGloeriaActionName(link) || getFutarioActionName(link) || getElevenOraActionName(link) || getCrovayaActionName(link) || getChicneryActionName(link);
+      var storefrontText = getLiserieActionName(link) || getGloeriaActionName(link) || getFutarioActionName(link) || getElevenOraActionName(link) || getCrovayaActionName(link) || getChicneryActionName(link);
       if (storefrontText) return storefrontText;
 
       var head = link.querySelector('.product-name, .product-title-wrapper, h1, h2, h3, h4, h5, h6');
