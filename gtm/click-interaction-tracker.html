@@ -1,6 +1,8 @@
 <script>
 // ============================================================================
-// Modesees - site-wide click tracking, v1 (2026-08-19)
+// Modesees and Chicnery - site-wide click tracking
+// Chicnery uses a hostname-scoped Fashionopolism 11.1.0 adapter. Paris rules
+// remain the fallback for Modesees. GTM Custom HTML requires ES5 syntax here.
 //
 // Ported from the Eco-Worthy tracker v3 and retargeted at Shopify's *Paris*
 // theme (theme_store_id 2702, schema 1.2.0). Almost none of the Dawn
@@ -118,6 +120,18 @@
   };
 
   var processedClicks = {};
+
+  // Only Fashionopolism's actionable controls belong in this extension.
+  // Text fields remain excluded by the existing blacklist.
+  if (isChicneryStorefront()) {
+    config.whitelist = config.whitelist.concat([
+      'input#addToCart[type="submit"]', '.swatches__form--input',
+      '.swatches__form--label', '.js-thumb-item',
+      '.js-hz-filter-input', '.js-hz-filter-label',
+      '.js-hz-filter-list input[type="radio"]',
+      '.js-hz-filter-list input[type="checkbox"]'
+    ]);
+  }
 
   // Flickity injects aria-label="1 / 4" style labels on slides; reject those.
   var GENERIC_ARIA = /^(\s*\d+\s*[\/\\|]\s*\d+\s*|go to slide.*|next slide|previous slide|next|prev|previous|slide \d+.*|\d+)$/i;
@@ -254,6 +268,10 @@
   function isInBlacklist(element) {
     if (!config.blacklist || !config.blacklist.length) return false;
     try {
+      // Fashionopolism uses a readonly text input as its sort/filter button.
+      // This exception never admits editable inputs or opt-out controls.
+      if (isChicneryStorefront() && safeMatchesSelector(element, 'input.js-hz-filter-input[readonly]') &&
+          !safeMatchesSelector(element, '.no-track, .js-no-track, [data-no-track], [data-ga-track="false"]')) return false;
       for (var i = 0; i < config.blacklist.length; i++) {
         if (safeMatchesSelector(element, config.blacklist[i])) return true;
       }
@@ -309,6 +327,9 @@
     try {
       var manual = element.getAttribute('data-ga-action-name');
       if (manual && manual.trim()) return manual.trim();
+
+      var storefrontText = getChicneryActionName(element);
+      if (storefrontText) return storefrontText;
 
       var head = element.querySelector(
         '.product-name, .product-title-wrapper, .side-drawer-modal-title, h1, h2, h3, h4, h5, h6');
@@ -447,10 +468,76 @@
   // Module identification. ORDER IS PRIORITY - do not reshuffle casually.
   // Shared with link-interaction-tracker.html; keep both copies identical.
   // --------------------------------------------------------------------------
+
+  // Store-specific selectors must never change the Paris classification.
+  function isChicneryStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)chicnery\.com$/.test(hostname) ||
+        hostname === 'idn2mq-a7.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyChicneryModule(element) {
+    if (!isChicneryStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('#slideout-ajax-cart, #mini-cart, .mini-cart')) return 'cart_drawer';
+    if (cl('#slideout-mobile-navigation, nav.mobile-menu')) return 'mobile_menu';
+    if (cl('.myrv, .myrv-badge, #myrv-reviews, [class*="myrv-"]')) return 'product_reviews';
+    if (cl('.collection__page-filter, .collection__horizontal-toolbar, .collection__filtering, .sort-by__wrapper'))
+      return 'collection_filters';
+    if (cl('.product__section-images, .product__gallery--container, .js-thumb-item'))
+      return 'pdp_gallery';
+    if (cl('.product-index, .js-product-listing')) return 'product_list';
+    if (cl('.product__section-details, .product__form-container, .product__form-buttons, .product__variants-swatches'))
+      return 'pdp_purchase_area';
+    if (cl('.collection__list-item')) return 'category_grid';
+    if (cl('.slideshow-section')) {
+      // Only the primary slideshow section is the homepage hero. Other
+      // slideshows keep their carousel classification.
+      return cl('[id^="shopify-section-template--"][id$="__slideshow"]')
+        ? 'hero_banner' : 'carousel';
+    }
+    if (cl('.collection__page-products')) return 'collection_grid';
+    return null;
+  }
+
+  function getChicneryActionName(element) {
+    if (!isChicneryStorefront()) return '';
+    if (safeClosest(element, '#logo, .theme__logo')) return 'Brand Logo';
+    if (safeMatchesSelector(element, '.swatches__form--input')) return element.value || '';
+    if (safeMatchesSelector(element, 'input.js-hz-filter-input[readonly]')) {
+      return element.getAttribute('data-placeholder') || element.getAttribute('placeholder') || 'Filter';
+    }
+    if (safeMatchesSelector(element, '.js-hz-filter-list input')) {
+      var optionLabel = element.parentElement && element.parentElement.querySelector('label');
+      if (optionLabel && HAS_WORD.test(optionLabel.textContent || '')) return optionLabel.textContent.trim();
+    }
+    if (safeMatchesSelector(element, '.swatches__form--label, .js-hz-filter-label')) {
+      var control = document.getElementById(element.getAttribute('for') || '');
+      if (control && control.value) return control.value;
+    }
+    var thumbnail = safeClosest(element, '.js-thumb-item');
+    if (thumbnail) {
+      var index = parseInt(thumbnail.getAttribute('data-slide-index'), 10);
+      if (!isNaN(index)) return 'Product Image ' + (index + 1);
+    }
+    if (safeMatchesSelector(element, '.quantity-control-up')) return 'Qty Plus';
+    if (safeMatchesSelector(element, '.quantity-control-down')) return 'Qty Minus';
+    var card = safeClosest(element, '.product-index, .js-product-listing');
+    if (card && safeMatchesSelector(element, 'a') && !HAS_WORD.test(element.textContent || '')) {
+      var title = card.querySelector('.product--listing-title');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    return '';
+  }
+
   window.dlIdentifyModule = function(element) {
     if (!element) return 'unknown';
     function cl(sel) { return safeClosest(element, sel); }
     try {
+      var storefrontModule = identifyChicneryModule(element);
+      if (storefrontModule) return storefrontModule;
       // Header first. Paris nests <a> inside <summary> inside li.site-nav-item.
       if (cl('header.header, .header-section, .main-header-top, nav.nav-main-wrapper, #mobile-nav-menu, .drawer-mobile-menu, .site-nav-item, .header-icons-item, .navbar')) {
         return cl('.nav-grandmenu, .mega-menu, [class*="mega"]') ? 'mega_menu' : 'header_menu';
@@ -491,6 +578,7 @@
   function getInteractionType(element) {
     if (!element) return 'click';
     try {
+      if (isChicneryStorefront() && safeMatchesSelector(element, 'input.js-hz-filter-input[readonly]')) return 'button';
       if (element.tagName === 'A' || safeMatchesSelector(element, 'a')) return 'link';
       if (element.tagName === 'BUTTON' || safeMatchesSelector(element, 'button') ||
           element.getAttribute('role') === 'button') return 'button';
@@ -531,6 +619,14 @@
     try {
       var target = event.target || event.srcElement;
       if (!target || target === document.body) return;
+
+      // Native labels forward a second click to their radio/checkbox. Track
+      // that control event once, including keyboard activation.
+      if (isChicneryStorefront()) {
+        var label = safeClosest(target, 'label.swatches__form--label, label.js-hz-filter-label');
+        var control = label && document.getElementById(label.getAttribute('for') || '');
+        if (control && !control.disabled && /^(radio|checkbox)$/i.test(control.type)) return;
+      }
 
       var interactiveElement = target;
       var isClickable = false;

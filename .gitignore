@@ -1,7 +1,7 @@
 .DS_Store
 
-# Ignore minified JS files in this workspace
-# These are for delivery to the client
+
+dist/
 *.min.js
 
 # Ad-hoc Firestore attribution analysis; pulls production data into .cache/
