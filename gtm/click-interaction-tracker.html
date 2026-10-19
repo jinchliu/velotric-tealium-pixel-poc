@@ -1,8 +1,8 @@
 <script>
 // ============================================================================
-// Modesees, Chicnery, Crovaya, ElevenOra and Futario - site-wide click tracking
+// Modesees, Chicnery, Crovaya, ElevenOra, Futario and Gloeria - site-wide click tracking
 // Paris rules remain the Modesees fallback. Hostname-scoped adapters support
-// Fashionopolism (Chicnery), Symmetry (Crovaya), Align (ElevenOra) and Motion (Futario).
+// Fashionopolism (Chicnery), Symmetry (Crovaya), Align (ElevenOra), Motion (Futario) and Palo Alto (Gloeria/Ginariel).
 // GTM Custom HTML requires ES5 syntax here.
 //
 // Ported from the Eco-Worthy tracker v3 and retargeted at Shopify's *Paris*
@@ -121,6 +121,15 @@
   };
 
   var processedClicks = {};
+
+  if (isGloeriaStorefront()) {
+    config.whitelist = config.whitelist.concat([
+      '.product__selectors input[type="radio"]', '.swatch__button label', '.radio__button label',
+      '.collection__sort__input', 'label.collection__sort__button',
+      '.swatches .swatch-view-item[role="radio"]', '.cl-type-swatch[role="radio"]',
+      '.product-gallery__media-slide'
+    ]);
+  }
 
   if (isFutarioStorefront()) {
     config.whitelist = config.whitelist.concat([
@@ -353,7 +362,7 @@
       var manual = element.getAttribute('data-ga-action-name');
       if (manual && manual.trim()) return manual.trim();
 
-      var storefrontText = getFutarioActionName(element) || getElevenOraActionName(element) || getCrovayaActionName(element) || getChicneryActionName(element);
+      var storefrontText = getGloeriaActionName(element) || getFutarioActionName(element) || getElevenOraActionName(element) || getCrovayaActionName(element) || getChicneryActionName(element);
       if (storefrontText) return storefrontText;
 
       var head = element.querySelector(
@@ -495,6 +504,83 @@
   // --------------------------------------------------------------------------
 
   // Store-specific selectors must never change the Paris classification.
+
+  // Gloeria's configured storefront is Ginariel, using Palo Alto selectors.
+  function isGloeriaStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)ginariel\.com$/.test(hostname) ||
+        hostname === 'menalvin.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyGloeriaModule(element) {
+    if (!isGloeriaStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('#cart-drawer, .cart-drawer')) return 'cart_drawer';
+    if (cl('mobile-menu, .shopify-section-mobile-menu')) return 'mobile_menu';
+    if (cl('.announcement-bar-static')) return 'announcement_bar';
+    if (cl('#SiteHeader, .shopify-section-header')) return 'header_menu';
+    if (cl('.section-footer, .shopify-section-group-group-footer')) return 'footer';
+    if (cl('.myrv, .jdgm-widget, [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('.product-gallery, .product-single__thumbnails, .pswp')) return 'pdp_gallery';
+    if (cl('.product-single__details')) return 'pdp_purchase_area';
+    if (cl('.product-grid-item')) return 'product_list';
+    if (cl('.collection__sort-bar, .collection__sticky-bar')) return 'collection_filters';
+    var slideshow = cl('.shopify-section.slideshow');
+    if (slideshow) {
+      return slideshow === document.querySelector('#MainContent .shopify-section.slideshow')
+        ? 'hero_banner' : 'carousel';
+    }
+    if (cl('.mosaic__item')) return 'category_grid';
+    if (cl('[id^="SectionPromotionRow--"]')) return 'promo_tiles';
+    if (cl('.flickity-enabled')) return 'carousel';
+    if (cl('.collection-section')) return 'collection_grid';
+    return null;
+  }
+
+  function getGloeriaActionName(element) {
+    if (!isGloeriaStorefront()) return '';
+    if (safeMatchesSelector(element, 'a.logo__image-link')) return 'Brand Logo';
+    if (safeMatchesSelector(element, '.product__selectors input[type="radio"]')) return element.value || '';
+    if (safeMatchesSelector(element, '.collection__sort__input')) {
+      var sortLabel = element.parentElement && element.parentElement.querySelector('.collection__sort__button');
+      return sortLabel ? (sortLabel.textContent || '').trim() : (element.value || '');
+    }
+    if (safeMatchesSelector(element, '.swatch-view-item[role="radio"]')) {
+      return element.getAttribute('orig-value') || element.getAttribute('aria-label') || '';
+    }
+    if (safeMatchesSelector(element, '.cl-type-swatch[role="radio"]')) return (element.textContent || '').trim();
+    if (safeMatchesSelector(element, '[data-quantity-plus]')) return 'Qty Plus';
+    if (safeMatchesSelector(element, '[data-quantity-minus]')) return 'Qty Minus';
+    if (safeMatchesSelector(element, '.btn-quick-buy')) return 'Quick Buy';
+    if (safeMatchesSelector(element, '.product__submit__add')) return 'Add to cart';
+    var thumbnail = safeClosest(element, '.product-single__thumbnail');
+    var thumbs = thumbnail && safeClosest(thumbnail, '.product-single__thumbnails');
+    if (thumbs) {
+      return 'Product Image ' + (Array.prototype.indexOf.call(thumbs.querySelectorAll('.product-single__thumbnail'), thumbnail) + 1);
+    }
+    var slide = safeClosest(element, '.product-gallery__media-slide');
+    var gallery = slide && safeClosest(slide, '.product-gallery__media-slider');
+    if (gallery) {
+      return 'Product Image ' + (Array.prototype.indexOf.call(gallery.querySelectorAll('.product-gallery__media-slide'), slide) + 1);
+    }
+    var card = safeClosest(element, '.product-grid-item');
+    if (card && safeMatchesSelector(element, 'a[href*="/products/"]')) {
+      var title = card.querySelector('.product-grid-item__title');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    if (safeMatchesSelector(element, 'a, button, summary, [role="button"]') && element.querySelector('svg')) {
+      var clone = element.cloneNode(true);
+      var icons = clone.querySelectorAll('svg');
+      for (var i = 0; i < icons.length; i++) {
+        if (icons[i].parentNode) icons[i].parentNode.removeChild(icons[i]);
+      }
+      var text = (clone.textContent || '').trim();
+      if (HAS_WORD.test(text)) return text;
+    }
+    return '';
+  }
 
   // Motion selectors apply only to Futario and its Shopify alias.
   function isFutarioStorefront() {
@@ -772,7 +858,7 @@
     if (!element) return 'unknown';
     function cl(sel) { return safeClosest(element, sel); }
     try {
-      var storefrontModule = identifyFutarioModule(element) || identifyElevenOraModule(element) || identifyCrovayaModule(element) || identifyChicneryModule(element);
+      var storefrontModule = identifyGloeriaModule(element) || identifyFutarioModule(element) || identifyElevenOraModule(element) || identifyCrovayaModule(element) || identifyChicneryModule(element);
       if (storefrontModule) return storefrontModule;
       // Header first. Paris nests <a> inside <summary> inside li.site-nav-item.
       if (cl('header.header, .header-section, .main-header-top, nav.nav-main-wrapper, #mobile-nav-menu, .drawer-mobile-menu, .site-nav-item, .header-icons-item, .navbar')) {
@@ -814,6 +900,7 @@
   function getInteractionType(element) {
     if (!element) return 'click';
     try {
+      if (isGloeriaStorefront() && safeMatchesSelector(element, '.swatch-view-item[role="radio"], .cl-type-swatch[role="radio"]')) return 'filter_radio';
       if (isChicneryStorefront() && safeMatchesSelector(element, 'input.js-hz-filter-input[readonly]')) return 'button';
       if (element.tagName === 'A' || safeMatchesSelector(element, 'a')) return 'link';
       if (element.tagName === 'BUTTON' || safeMatchesSelector(element, 'button') ||
@@ -855,6 +942,14 @@
     try {
       var target = event.target || event.srcElement;
       if (!target || target === document.body) return;
+
+      // Palo Alto native labels forward a radio click, unlike app role=radio controls.
+      if (isGloeriaStorefront() && !safeMatchesSelector(target, 'input')) {
+        var gloeriaLabel = safeClosest(target, '.swatch__button label, .radio__button label, label.collection__sort__button');
+        var gloeriaControlId = gloeriaLabel && gloeriaLabel.getAttribute('for');
+        var gloeriaControl = gloeriaLabel && gloeriaControlId && document.getElementById(gloeriaControlId);
+        if (gloeriaControl && !gloeriaControl.disabled && gloeriaControl.type === 'radio') return;
+      }
 
       // Motion labels forward their radio/checkbox click. Record the input once.
       if (isFutarioStorefront() && !safeMatchesSelector(target, 'input')) {
