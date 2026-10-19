@@ -1,8 +1,8 @@
 <script>
 // ============================================================================
-// Modesees, Chicnery, Crovaya, ElevenOra, Futario, Gloeria and Liserie - site-wide click tracking
+// Modesees, Chicnery, Crovaya, ElevenOra, Futario, Gloeria, Liserie and Mooyius - site-wide click tracking
 // Paris rules remain the Modesees fallback. Hostname-scoped adapters support
-// Fashionopolism (Chicnery), Symmetry (Crovaya), Align (ElevenOra), Motion (Futario), Palo Alto (Gloeria/Ginariel) and Prestige (Liserie).
+// Fashionopolism (Chicnery), Symmetry (Crovaya), Align (ElevenOra), Motion (Futario), Palo Alto (Gloeria/Ginariel), Prestige (Liserie) and Fashionopolism 9.5 (Mooyius).
 // GTM Custom HTML requires ES5 syntax here.
 //
 // Ported from the Eco-Worthy tracker v3 and retargeted at Shopify's *Paris*
@@ -121,6 +121,17 @@
   };
 
   var processedClicks = {};
+
+  if (isMooyiusStorefront()) {
+    config.whitelist = config.whitelist.concat([
+      'input#addToCart[type="submit"]', '.swatches__form--input',
+      '.swatches__form--label', '.js-thumb-item',
+      '.swatch-view-item[role="radio"]', '.js-hz-filter-label',
+      '.js-hz-filter-list input[type="radio"]',
+      '.js-hz-filter-list input[type="checkbox"]',
+      'input.js-hz-filter-input[readonly]'
+    ]);
+  }
 
   if (isLiserieStorefront()) {
     config.whitelist = config.whitelist.concat([
@@ -312,7 +323,7 @@
     try {
       // Fashionopolism uses a readonly text input as its sort/filter button.
       // This exception never admits editable inputs or opt-out controls.
-      if (isChicneryStorefront() && safeMatchesSelector(element, 'input.js-hz-filter-input[readonly]') &&
+      if ((isMooyiusStorefront() || isChicneryStorefront()) && safeMatchesSelector(element, 'input.js-hz-filter-input[readonly]') &&
           !safeMatchesSelector(element, '.no-track, .js-no-track, [data-no-track], [data-ga-track="false"]')) return false;
       for (var i = 0; i < config.blacklist.length; i++) {
         if (safeMatchesSelector(element, config.blacklist[i])) return true;
@@ -370,7 +381,7 @@
       var manual = element.getAttribute('data-ga-action-name');
       if (manual && manual.trim()) return manual.trim();
 
-      var storefrontText = getLiserieActionName(element) || getGloeriaActionName(element) || getFutarioActionName(element) || getElevenOraActionName(element) || getCrovayaActionName(element) || getChicneryActionName(element);
+      var storefrontText = getMooyiusActionName(element) || getLiserieActionName(element) || getGloeriaActionName(element) || getFutarioActionName(element) || getElevenOraActionName(element) || getCrovayaActionName(element) || getChicneryActionName(element);
       if (storefrontText) return storefrontText;
 
       var head = element.querySelector(
@@ -512,6 +523,79 @@
   // --------------------------------------------------------------------------
 
   // Store-specific selectors must never change the Paris classification.
+
+  // Fashionopolism 9.5 selectors apply only to Mooyius and its Shopify alias.
+  function isMooyiusStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)mooyius\.com$/.test(hostname) ||
+        hostname === '1a27ba-9d.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyMooyiusModule(element) {
+    if (!isMooyiusStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('#slideout-ajax-cart, #mini-cart, .mini-cart')) return 'cart_drawer';
+    if (cl('#shopify-section-mobile-navigation, nav.mobile-menu')) return 'mobile_menu';
+    if (cl('.announcement__bar-section')) return 'announcement_bar';
+    if (cl('.header-section, .theme-header')) return 'header_menu';
+    if (cl('.shopify-section-group-footer-group')) return 'footer';
+    if (cl('.myrv, .jdgm-widget, [class*="myrv-"], [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('.collection__page-filter, .collection__horizontal-toolbar, .collection__filtering, .sort-by__wrapper')) return 'collection_filters';
+    if (cl('.product__section-images, .product__gallery--container, .js-thumb-item')) return 'pdp_gallery';
+    if (cl('.product-index, .js-product-listing')) return 'product_list';
+    if (cl('.product__section-details, .product__form-container, .product__form-buttons, .product__variants-swatches')) return 'pdp_purchase_area';
+    if (cl('.collection__list-item')) return 'category_grid';
+    if (cl('.gallery__section')) return 'promo_tiles';
+    if (cl('.slideshow-section')) {
+      return cl('[id^="shopify-section-template--"][id$="__slideshow"]')
+        ? 'hero_banner' : 'carousel';
+    }
+    if (cl('.collection__page-products')) return 'collection_grid';
+    return null;
+  }
+
+  function getMooyiusActionName(element) {
+    if (!isMooyiusStorefront()) return '';
+    if (safeClosest(element, '#logo, .theme__logo')) return 'Brand Logo';
+    if (safeMatchesSelector(element, '.swatches__form--input')) return element.value || '';
+    if (safeMatchesSelector(element, '.swatch-view-item[role="radio"]')) return element.getAttribute('orig-value') || element.getAttribute('aria-label') || '';
+    if (safeMatchesSelector(element, 'input.js-hz-filter-input[readonly]')) {
+      return element.getAttribute('data-placeholder') || element.getAttribute('placeholder') || 'Filter';
+    }
+    if (safeMatchesSelector(element, '.js-hz-filter-list input')) {
+      var optionLabel = element.parentElement && element.parentElement.querySelector('label');
+      if (optionLabel) {
+        var caption = (optionLabel.textContent || '').replace(/\s*\(\d+\)\s*$/, '').trim();
+        if (HAS_WORD.test(caption)) return caption;
+      }
+    }
+    var thumbnail = safeClosest(element, '.js-thumb-item');
+    if (thumbnail) {
+      var index = parseInt(thumbnail.getAttribute('data-slide-index'), 10);
+      if (!isNaN(index)) return 'Product Image ' + (index + 1);
+    }
+    if (safeMatchesSelector(element, '.quantity-control-up')) return 'Qty Plus';
+    if (safeMatchesSelector(element, '.quantity-control-down')) return 'Qty Minus';
+    var card = safeClosest(element, '.product-index, .js-product-listing');
+    if (card && safeMatchesSelector(element, 'a[href*="/products/"]')) {
+      var title = card.getAttribute('data-alpha');
+      if (title && HAS_WORD.test(title)) return title.trim();
+      var heading = card.querySelector('.product-info h2');
+      if (heading && HAS_WORD.test(heading.textContent || '')) return heading.textContent.trim();
+    }
+    if (safeMatchesSelector(element, 'a, button, summary, [role="button"]') && element.querySelector('svg')) {
+      var clone = element.cloneNode(true);
+      var icons = clone.querySelectorAll('svg');
+      for (var i = 0; i < icons.length; i++) {
+        if (icons[i].parentNode) icons[i].parentNode.removeChild(icons[i]);
+      }
+      var text = (clone.textContent || '').trim();
+      if (HAS_WORD.test(text)) return text;
+    }
+    return '';
+  }
 
   // Prestige selectors apply only to Liserie and its Shopify alias.
   function isLiserieStorefront() {
@@ -949,7 +1033,7 @@
     if (!element) return 'unknown';
     function cl(sel) { return safeClosest(element, sel); }
     try {
-      var storefrontModule = identifyLiserieModule(element) || identifyGloeriaModule(element) || identifyFutarioModule(element) || identifyElevenOraModule(element) || identifyCrovayaModule(element) || identifyChicneryModule(element);
+      var storefrontModule = identifyMooyiusModule(element) || identifyLiserieModule(element) || identifyGloeriaModule(element) || identifyFutarioModule(element) || identifyElevenOraModule(element) || identifyCrovayaModule(element) || identifyChicneryModule(element);
       if (storefrontModule) return storefrontModule;
       // Header first. Paris nests <a> inside <summary> inside li.site-nav-item.
       if (cl('header.header, .header-section, .main-header-top, nav.nav-main-wrapper, #mobile-nav-menu, .drawer-mobile-menu, .site-nav-item, .header-icons-item, .navbar')) {
@@ -991,8 +1075,8 @@
   function getInteractionType(element) {
     if (!element) return 'click';
     try {
-      if (isGloeriaStorefront() && safeMatchesSelector(element, '.swatch-view-item[role="radio"], .cl-type-swatch[role="radio"]')) return 'filter_radio';
-      if (isChicneryStorefront() && safeMatchesSelector(element, 'input.js-hz-filter-input[readonly]')) return 'button';
+      if ((isMooyiusStorefront() || isGloeriaStorefront()) && safeMatchesSelector(element, '.swatch-view-item[role="radio"], .cl-type-swatch[role="radio"]')) return 'filter_radio';
+      if ((isMooyiusStorefront() || isChicneryStorefront()) && safeMatchesSelector(element, 'input.js-hz-filter-input[readonly]')) return 'button';
       if (element.tagName === 'A' || safeMatchesSelector(element, 'a')) return 'link';
       if (element.tagName === 'BUTTON' || safeMatchesSelector(element, 'button') ||
           element.getAttribute('role') === 'button') return 'button';
@@ -1033,6 +1117,14 @@
     try {
       var target = event.target || event.srcElement;
       if (!target || target === document.body) return;
+
+      // Mooyius native labels forward clicks to their enabled radio/checkbox.
+      if (isMooyiusStorefront() && !safeMatchesSelector(target, 'input')) {
+        var mooyiusLabel = safeClosest(target, 'label.swatches__form--label, label.js-hz-filter-label');
+        var mooyiusControlId = mooyiusLabel && mooyiusLabel.getAttribute('for');
+        var mooyiusControl = mooyiusControlId && document.getElementById(mooyiusControlId);
+        if (mooyiusControl && !mooyiusControl.disabled && /^(radio|checkbox)$/i.test(mooyiusControl.type)) return;
+      }
 
       // Prestige labels forward a native radio click; track the control once.
       if (isLiserieStorefront() && !safeMatchesSelector(target, 'input')) {
