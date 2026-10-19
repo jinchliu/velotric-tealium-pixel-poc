@@ -1,9 +1,9 @@
 <script>
 // ============================================================================
-// Modesees, Chicnery, Crovaya, ElevenOra, Futario, Gloeria, Liserie and Mooyius - link tracking
+// Modesees, Chicnery, Crovaya, ElevenOra, Futario, Gloeria, Liserie, Mooyius and Oklora - link tracking
 //
 // Paris rules remain the Modesees fallback. Hostname-scoped adapters support
-// Fashionopolism (Chicnery), Symmetry (Crovaya), Align (ElevenOra), Motion (Futario), Palo Alto (Gloeria/Ginariel), Prestige (Liserie) and Fashionopolism 9.5 (Mooyius).
+// Fashionopolism (Chicnery), Symmetry (Crovaya), Align (ElevenOra), Motion (Futario), Palo Alto (Gloeria/Ginariel), Prestige (Liserie) and Fashionopolism 9.5 (Mooyius) and Symmetry 8.3 (Oklora).
 // GTM Custom HTML requires ES5 syntax here. Shared module and storefront label
 // helpers must match click-interaction-tracker.html.
 //
@@ -55,7 +55,8 @@
       ['futario.com', 'www.futario.com', '8636f9-95.myshopify.com'],
       ['ginariel.com', 'www.ginariel.com', 'menalvin.myshopify.com'],
       ['liserie.com', 'www.liserie.com', '4hc40j-jr.myshopify.com'],
-      ['mooyius.com', 'www.mooyius.com', '1a27ba-9d.myshopify.com']
+      ['mooyius.com', 'www.mooyius.com', '1a27ba-9d.myshopify.com'],
+      ['oklora.com', 'www.oklora.com', '2zn2tj-iw.myshopify.com']
     ];
     for (var i = 0; i < stores.length; i++) {
       for (var j = 0; j < stores[i].length; j++) {
@@ -243,6 +244,67 @@
 
 
   // Store-specific selectors must never change the Paris classification.
+
+  // Symmetry 8.3 selectors apply only to Oklora and its Shopify alias.
+  function isOkloraStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)oklora\.com$/.test(hostname) ||
+        hostname === '2zn2tj-iw.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyOkloraModule(element) {
+    if (!isOkloraStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('cart-drawer, .cart-drawer')) return 'cart_drawer';
+    if (cl('.mobile-navigation-drawer')) return 'mobile_menu';
+    if (cl('.section-header, page-header, main-navigation')) return 'header_menu';
+    if (cl('.section-footer')) return 'footer';
+    if (cl('.section-announcement-bar, announcement-bar')) return 'announcement_bar';
+    if (cl('.myrv, .jdgm-widget, [class*="myrv-"], [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('media-gallery, .product-media-wrapper')) return 'pdp_gallery';
+    if (cl('product-block, .product-block')) return 'product_list';
+    if (cl('.filter-group, .filter-toggle, .filters, .filter-shade, [data-toggle-filters]')) return 'collection_filters';
+    if (cl('.product-form, buy-buttons, variant-picker, sticky-atc')) return 'pdp_purchase_area';
+    var slideshow = cl('.section-slideshow');
+    if (slideshow) {
+      return slideshow === document.querySelector('main .section-slideshow')
+        ? 'hero_banner' : 'carousel';
+    }
+    if (cl('.section-gallery')) return 'promo_tiles';
+    if (cl('.section-image-with-text-overlay, .section-compact-messages')) return 'promo_banner';
+    if (cl('.section-testimonials')) return 'customer_reviews';
+    if (cl('.collection-listing')) return 'collection_grid';
+    if (cl('slide-show, carousel-slider')) return 'carousel';
+    return null;
+  }
+
+  function getOkloraActionName(element) {
+    if (!isOkloraStorefront()) return '';
+    if (safeMatchesSelector(element, '.logo__link')) return 'Brand Logo';
+    if (safeMatchesSelector(element, 'a[data-quantity="up"]')) return 'Qty Plus';
+    if (safeMatchesSelector(element, 'a[data-quantity="down"]')) return 'Qty Minus';
+    if (safeMatchesSelector(element, 'input.js-option')) return element.value || '';
+    if (safeMatchesSelector(element, '.filter-group__checkbox, .filter-toggle__input')) {
+      var label = safeClosest(element, 'label');
+      var caption = label && label.querySelector('.filter-group__item__text, .filter-toggle__input-label-text');
+      if (caption && HAS_WORD.test(caption.textContent || '')) return caption.textContent.trim();
+      return element.value || '';
+    }
+    if (safeMatchesSelector(element, 'a.thumbnail, a.show-gallery')) {
+      var item = safeClosest(element, '.slider__item');
+      if (item && item.parentElement) {
+        return 'Product Image ' + (Array.prototype.indexOf.call(item.parentElement.children, item) + 1);
+      }
+    }
+    var card = safeClosest(element, 'product-block, .product-block');
+    if (card && safeMatchesSelector(element, 'a.product-link')) {
+      var title = card.querySelector('.product-block__title');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    return '';
+  }
 
   // Fashionopolism 9.5 selectors apply only to Mooyius and its Shopify alias.
   function isMooyiusStorefront() {
@@ -754,7 +816,7 @@
       if (!element) return 'unknown';
       function cl(sel) { return safeClosest(element, sel); }
       try {
-        var storefrontModule = identifyMooyiusModule(element) || identifyLiserieModule(element) || identifyGloeriaModule(element) || identifyFutarioModule(element) || identifyElevenOraModule(element) || identifyCrovayaModule(element) || identifyChicneryModule(element);
+        var storefrontModule = identifyOkloraModule(element) || identifyMooyiusModule(element) || identifyLiserieModule(element) || identifyGloeriaModule(element) || identifyFutarioModule(element) || identifyElevenOraModule(element) || identifyCrovayaModule(element) || identifyChicneryModule(element);
         if (storefrontModule) return storefrontModule;
         if (cl('header.header, .header-section, .main-header-top, nav.nav-main-wrapper, #mobile-nav-menu, .drawer-mobile-menu, .site-nav-item, .header-icons-item, .navbar')) {
           return cl('.nav-grandmenu, .mega-menu, [class*="mega"]') ? 'mega_menu' : 'header_menu';
@@ -891,7 +953,7 @@
       var manual = link.getAttribute('data-ga-action-name');
       if (manual && manual.trim()) return manual.trim();
 
-      var storefrontText = getMooyiusActionName(link) || getLiserieActionName(link) || getGloeriaActionName(link) || getFutarioActionName(link) || getElevenOraActionName(link) || getCrovayaActionName(link) || getChicneryActionName(link);
+      var storefrontText = getOkloraActionName(link) || getMooyiusActionName(link) || getLiserieActionName(link) || getGloeriaActionName(link) || getFutarioActionName(link) || getElevenOraActionName(link) || getCrovayaActionName(link) || getChicneryActionName(link);
       if (storefrontText) return storefrontText;
 
       var head = link.querySelector('.product-name, .product-title-wrapper, h1, h2, h3, h4, h5, h6');
