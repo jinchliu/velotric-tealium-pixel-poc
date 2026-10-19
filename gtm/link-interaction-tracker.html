@@ -1,9 +1,9 @@
 <script>
 // ============================================================================
-// Modesees, Chicnery, Crovaya, ElevenOra, Futario, Gloeria, Liserie, Mooyius, Oklora and Olivria - link tracking
+// Modesees, Chicnery, Crovaya, ElevenOra, Futario, Gloeria, Liserie, Mooyius, Oklora, Olivria and Oyrosy - link tracking
 //
 // Paris rules remain the Modesees fallback. Hostname-scoped adapters support
-// Fashionopolism (Chicnery), Symmetry (Crovaya), Align (ElevenOra), Motion (Futario), Palo Alto (Gloeria/Ginariel), Prestige (Liserie) and Fashionopolism 9.5 (Mooyius) and Symmetry 8.3 (Oklora) and Symmetry 8.0 (Olivria).
+// Fashionopolism (Chicnery), Symmetry (Crovaya), Align (ElevenOra), Motion (Futario), Palo Alto (Gloeria/Ginariel), Prestige (Liserie) and Fashionopolism 9.5 (Mooyius) and Symmetry 8.3 (Oklora) and Symmetry 8.0 (Olivria), and Be Yours (Oyrosy).
 // GTM Custom HTML requires ES5 syntax here. Shared module and storefront label
 // helpers must match click-interaction-tracker.html.
 //
@@ -57,7 +57,8 @@
       ['liserie.com', 'www.liserie.com', '4hc40j-jr.myshopify.com'],
       ['mooyius.com', 'www.mooyius.com', '1a27ba-9d.myshopify.com'],
       ['oklora.com', 'www.oklora.com', '2zn2tj-iw.myshopify.com'],
-      ['olivria.com', 'www.olivria.com', '2n2kev-xy.myshopify.com']
+      ['olivria.com', 'www.olivria.com', '2n2kev-xy.myshopify.com'],
+      ['oyrosy.com', 'www.oyrosy.com', 'service20220210.myshopify.com']
     ];
     for (var i = 0; i < stores.length; i++) {
       for (var j = 0; j < stores[i].length; j++) {
@@ -245,6 +246,82 @@
 
 
   // Store-specific selectors must never change the Paris classification.
+
+  // Be Yours selectors apply only to Oyrosy and its Shopify alias.
+  function isOyrosyStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)oyrosy\.com$/.test(hostname) ||
+        hostname === 'service20220210.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyOyrosyModule(element) {
+    if (!isOyrosyStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('mini-cart, .cart-drawer')) return 'cart_drawer';
+    if (cl('.menu-drawer, .menu-drawer-container')) return 'mobile_menu';
+    if (cl('.search-modal, predictive-search, .predictive-search')) return 'search';
+    if (cl('header, .shopify-section-header')) return 'header_menu';
+    if (cl('footer, .shopify-section-group-footer-group')) return 'footer';
+    if (cl('announcement-bar, .shopify-section-announcement-bar')) return 'announcement_bar';
+    if (cl('.myrv, .jdgm-widget, [class*="myrv-"], [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('media-gallery, product-gallery, thumbnail-slider, product-modal')) return 'pdp_gallery';
+    if (cl('facet-filters-form, facet-drawer, .facets, .mobile-facets')) return 'collection_filters';
+    if (cl('.product__accordion')) return 'pdp_accordion';
+    if (cl('product-form, variant-selects, .product__info-container, quick-view, quick-view-drawer')) return 'pdp_purchase_area';
+    if (cl('.card-wrapper')) return 'product_list';
+    var slideshow = cl('slideshow-component');
+    if (slideshow) {
+      return slideshow === document.querySelector('main slideshow-component')
+        ? 'hero_banner' : 'carousel';
+    }
+    if (cl('[id*="__gallery_"]')) return 'category_grid';
+    if (cl('[id*="__double_image_"], [id*="__image_grid_"], .section-final-few-size-bar')) return 'promo_tiles';
+    if (cl('.pagination-wrapper, #ProductGridContainer')) return 'collection_grid';
+    if (cl('slider-component')) return 'carousel';
+    return null;
+  }
+
+  function getOyrosyActionName(element) {
+    if (!isOyrosyStorefront()) return '';
+    if (safeMatchesSelector(element, '.header__heading-link')) return 'Brand Logo';
+    if (safeMatchesSelector(element, '.list-social__link')) {
+      var socialName = element.querySelector('.visually-hidden');
+      if (socialName) return socialName.textContent.trim();
+    }
+    if (safeMatchesSelector(element, 'drawer-close-button')) return 'Close menu';
+    if (safeMatchesSelector(element, '.menu-drawer__close-button')) return 'Back';
+    if (safeMatchesSelector(element, '.quantity__button[name="plus"]')) return 'Qty Plus';
+    if (safeMatchesSelector(element, '.quantity__button[name="minus"]')) return 'Qty Minus';
+    if (safeMatchesSelector(element, 'variant-selects input[type="radio"]')) return element.value || '';
+    if (safeMatchesSelector(element, 'facet-filters-form input[type="radio"], facet-filters-form input[type="checkbox"], facet-drawer input[type="radio"], facet-drawer input[type="checkbox"]')) {
+      var option = safeClosest(element, '.facets__item, .mobile-facets__item');
+      var label = option && option.querySelector('label');
+      if (label && HAS_WORD.test(label.textContent || '')) return label.textContent.trim();
+      return element.value || '';
+    }
+    if (safeMatchesSelector(element, '.product__media-toggle')) {
+      var media = safeClosest(element, '[data-media-position]');
+      if (media) return 'Product Image ' + media.getAttribute('data-media-position');
+    }
+    var card = safeClosest(element, '.card-wrapper');
+    if (card && safeMatchesSelector(element, 'a')) {
+      var swatch = safeClosest(element, 'color-swatch');
+      if (swatch) return swatch.getAttribute('title') || '';
+      var title = card.querySelector('.card-information__text');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    // Hero image links contain only a non-breaking space and empty image alts.
+    if (safeClosest(element, 'slideshow-component') && safeMatchesSelector(element, 'a')) {
+      var text = (element.textContent || '').trim();
+      if (!HAS_WORD.test(text)) {
+        var path = (element.getAttribute('href') || '').split('?')[0].split('/');
+        return (path[path.length - 1] || 'Shop Now').replace(/-/g, ' ');
+      }
+    }
+    return '';
+  }
 
   // Symmetry 8.0 selectors apply only to Olivria and its Shopify alias.
   function isOlivriaStorefront() {
@@ -880,7 +957,7 @@
       if (!element) return 'unknown';
       function cl(sel) { return safeClosest(element, sel); }
       try {
-        var storefrontModule = identifyOlivriaModule(element) || identifyOkloraModule(element) || identifyMooyiusModule(element) || identifyLiserieModule(element) || identifyGloeriaModule(element) || identifyFutarioModule(element) || identifyElevenOraModule(element) || identifyCrovayaModule(element) || identifyChicneryModule(element);
+        var storefrontModule = identifyOyrosyModule(element) || identifyOlivriaModule(element) || identifyOkloraModule(element) || identifyMooyiusModule(element) || identifyLiserieModule(element) || identifyGloeriaModule(element) || identifyFutarioModule(element) || identifyElevenOraModule(element) || identifyCrovayaModule(element) || identifyChicneryModule(element);
         if (storefrontModule) return storefrontModule;
         if (cl('header.header, .header-section, .main-header-top, nav.nav-main-wrapper, #mobile-nav-menu, .drawer-mobile-menu, .site-nav-item, .header-icons-item, .navbar')) {
           return cl('.nav-grandmenu, .mega-menu, [class*="mega"]') ? 'mega_menu' : 'header_menu';
@@ -1017,7 +1094,7 @@
       var manual = link.getAttribute('data-ga-action-name');
       if (manual && manual.trim()) return manual.trim();
 
-      var storefrontText = getOlivriaActionName(link) || getOkloraActionName(link) || getMooyiusActionName(link) || getLiserieActionName(link) || getGloeriaActionName(link) || getFutarioActionName(link) || getElevenOraActionName(link) || getCrovayaActionName(link) || getChicneryActionName(link);
+      var storefrontText = getOyrosyActionName(link) || getOlivriaActionName(link) || getOkloraActionName(link) || getMooyiusActionName(link) || getLiserieActionName(link) || getGloeriaActionName(link) || getFutarioActionName(link) || getElevenOraActionName(link) || getCrovayaActionName(link) || getChicneryActionName(link);
       if (storefrontText) return storefrontText;
 
       var head = link.querySelector('.product-name, .product-title-wrapper, h1, h2, h3, h4, h5, h6');
