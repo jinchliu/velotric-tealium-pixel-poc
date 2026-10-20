@@ -60,7 +60,8 @@
       ['olivria.com', 'www.olivria.com', '2n2kev-xy.myshopify.com'],
       ['oyrosy.com', 'www.oyrosy.com', 'service20220210.myshopify.com'],
       ['vionva.com', 'www.vionva.com', 's0isut-uw.myshopify.com'],
-      ['yohers.com', 'www.yohers.com', '273b3b-2.myshopify.com']
+      ['yohers.com', 'www.yohers.com', '273b3b-2.myshopify.com'],
+      ['zemurea.com', 'www.zemurea.com', 'zemurea.myshopify.com']
     ];
     for (var i = 0; i < stores.length; i++) {
       for (var j = 0; j < stores[i].length; j++) {
@@ -248,6 +249,72 @@
 
 
   // Store-specific selectors must never change the Paris classification.
+
+  // Release selectors apply only to Zemurea and its Shopify alias.
+  function isZemureaStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)zemurea\.com$/.test(hostname) ||
+        hostname === 'zemurea.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyZemureaModule(element) {
+    if (!isZemureaStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('cart-drawer')) return 'cart_drawer';
+    if (cl('quick-cart-drawer')) return 'pdp_purchase_area';
+    if (cl('header-drawer')) return 'mobile_menu';
+    if (cl('search-drawer, predictive-search')) return 'search';
+    if (cl('.section-header')) return 'header_menu';
+    if (cl('.shopify-section-group-footer-group')) return 'footer';
+    if (cl('.section-announcement-bar')) return 'announcement_bar';
+    if (cl('.jdgm-widget, [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('lb-upsell-widget, [class*="cbb-frequently-bought"]')) return 'frequently_bought';
+    if (cl('swiper-product-gallery, swiper-product-thumbs, .pswp')) return 'pdp_gallery';
+    if (cl('facet-filters-form')) return 'collection_filters';
+    if (cl('product-card')) return 'product_list';
+    if (cl('product-info, product-form, product-variant-selects, .product-bar')) return 'pdp_purchase_area';
+    var hero = cl('.section-hero-banner');
+    if (hero) return hero === document.querySelector('main .section-hero-banner') ? 'hero_banner' : 'carousel';
+    if (cl('.section__featured-collections, .card-collection')) return 'category_grid';
+    if (cl('.section-dual-tiles')) return 'promo_tiles';
+    if (cl('.section-collection')) return 'collection_grid';
+    if (cl('swiper-component, social-media-highlights-slider, .section--featured-products, .section--social-media-highlights')) return 'carousel';
+    return null;
+  }
+
+  function getZemureaActionName(element) {
+    if (!isZemureaStorefront()) return '';
+    if (safeMatchesSelector(element, '.header__logo a')) return 'Brand Logo';
+    if (safeMatchesSelector(element, '.section-announcement-bar a, .section-hero-banner a')) {
+      var ownText = (element.textContent || '').trim();
+      if (HAS_WORD.test(ownText)) return ownText;
+    }
+    if (safeMatchesSelector(element, '.quick-cart-drawer__trigger')) return 'Choose options';
+    if (safeMatchesSelector(element, '.product-option__input[type="radio"]')) return element.value || element.getAttribute('aria-label') || '';
+    if (safeMatchesSelector(element, '.quantity__button[name="plus"], .quantity__button[name="increment"]')) return 'Qty Plus';
+    if (safeMatchesSelector(element, '.quantity__button[name="minus"], .quantity__button[name="decrement"]')) return 'Qty Minus';
+    if (safeMatchesSelector(element, '.lb-card-checkbox, .cbb-frequently-bought-selector-input')) {
+      return (element.getAttribute('aria-label') || '').replace(/^Selection of\s+/i, '').replace(/\s+checkbox$/i, '');
+    }
+    if (safeMatchesSelector(element, '.product__gallery-toggle, swiper-product-thumbs .swiper-slide')) {
+      var slide = safeClosest(element, '.swiper-slide[data-index]');
+      var index = slide && slide.getAttribute('data-index');
+      if (index !== null && /^\d+$/.test(index || '')) return 'Product Image ' + (parseInt(index, 10) + 1);
+    }
+    var card = safeClosest(element, 'product-card');
+    if (card && safeMatchesSelector(element, 'a[data-product-link], a.product-card__link')) {
+      var title = card.querySelector('.product-card__title a, .product-card__title');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    if (safeMatchesSelector(element, '.section-dual-tiles__button-link')) {
+      var tile = safeClosest(element, '.section-dual-tiles__block');
+      var heading = tile && tile.querySelector('.section-dual-tiles__content h2, .section-dual-tiles__content h3, .section-dual-tiles__content h4, .section-dual-tiles__content h5');
+      if (heading && HAS_WORD.test(heading.textContent || '')) return heading.textContent.trim();
+    }
+    return '';
+  }
 
   // Impact selectors apply only to Yohers and its Shopify alias.
   function isYohersStorefront() {
@@ -1099,7 +1166,7 @@
       if (!element) return 'unknown';
       function cl(sel) { return safeClosest(element, sel); }
       try {
-        var storefrontModule = identifyYohersModule(element) || identifyVionvaModule(element) || identifyOyrosyModule(element) || identifyOlivriaModule(element) || identifyOkloraModule(element) || identifyMooyiusModule(element) || identifyLiserieModule(element) || identifyGloeriaModule(element) || identifyFutarioModule(element) || identifyElevenOraModule(element) || identifyCrovayaModule(element) || identifyChicneryModule(element);
+        var storefrontModule = identifyZemureaModule(element) || identifyYohersModule(element) || identifyVionvaModule(element) || identifyOyrosyModule(element) || identifyOlivriaModule(element) || identifyOkloraModule(element) || identifyMooyiusModule(element) || identifyLiserieModule(element) || identifyGloeriaModule(element) || identifyFutarioModule(element) || identifyElevenOraModule(element) || identifyCrovayaModule(element) || identifyChicneryModule(element);
         if (storefrontModule) return storefrontModule;
         if (cl('header.header, .header-section, .main-header-top, nav.nav-main-wrapper, #mobile-nav-menu, .drawer-mobile-menu, .site-nav-item, .header-icons-item, .navbar')) {
           return cl('.nav-grandmenu, .mega-menu, [class*="mega"]') ? 'mega_menu' : 'header_menu';
@@ -1236,7 +1303,7 @@
       var manual = link.getAttribute('data-ga-action-name');
       if (manual && manual.trim()) return manual.trim();
 
-      var storefrontText = getYohersActionName(link) || getVionvaActionName(link) || getOyrosyActionName(link) || getOlivriaActionName(link) || getOkloraActionName(link) || getMooyiusActionName(link) || getLiserieActionName(link) || getGloeriaActionName(link) || getFutarioActionName(link) || getElevenOraActionName(link) || getCrovayaActionName(link) || getChicneryActionName(link);
+      var storefrontText = getZemureaActionName(link) || getYohersActionName(link) || getVionvaActionName(link) || getOyrosyActionName(link) || getOlivriaActionName(link) || getOkloraActionName(link) || getMooyiusActionName(link) || getLiserieActionName(link) || getGloeriaActionName(link) || getFutarioActionName(link) || getElevenOraActionName(link) || getCrovayaActionName(link) || getChicneryActionName(link);
       if (storefrontText) return storefrontText;
 
       var head = link.querySelector('.product-name, .product-title-wrapper, h1, h2, h3, h4, h5, h6');
