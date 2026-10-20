@@ -1,9 +1,9 @@
 <script>
 // ============================================================================
-// Modesees, Chicnery, Crovaya, ElevenOra, Futario, Gloeria, Liserie, Mooyius, Oklora, Olivria, Oyrosy and Vionva - link tracking
+// Modesees, Chicnery, Crovaya, ElevenOra, Futario, Gloeria, Liserie, Mooyius, Oklora, Olivria, Oyrosy, Vionva and Yohers - link tracking
 //
 // Paris rules remain the Modesees fallback. Hostname-scoped adapters support
-// Fashionopolism (Chicnery), Symmetry (Crovaya), Align (ElevenOra), Motion (Futario), Palo Alto (Gloeria/Ginariel), Prestige (Liserie) and Fashionopolism 9.5 (Mooyius) and Symmetry 8.3 (Oklora) and Symmetry 8.0 (Olivria), Be Yours (Oyrosy), and Fabric (Vionva).
+// Fashionopolism (Chicnery), Symmetry (Crovaya), Align (ElevenOra), Motion (Futario), Palo Alto (Gloeria/Ginariel), Prestige (Liserie) and Fashionopolism 9.5 (Mooyius) and Symmetry 8.3 (Oklora) and Symmetry 8.0 (Olivria), Be Yours (Oyrosy), Fabric (Vionva), and Impact (Yohers).
 // GTM Custom HTML requires ES5 syntax here. Shared module and storefront label
 // helpers must match click-interaction-tracker.html.
 //
@@ -59,7 +59,8 @@
       ['oklora.com', 'www.oklora.com', '2zn2tj-iw.myshopify.com'],
       ['olivria.com', 'www.olivria.com', '2n2kev-xy.myshopify.com'],
       ['oyrosy.com', 'www.oyrosy.com', 'service20220210.myshopify.com'],
-      ['vionva.com', 'www.vionva.com', 's0isut-uw.myshopify.com']
+      ['vionva.com', 'www.vionva.com', 's0isut-uw.myshopify.com'],
+      ['yohers.com', 'www.yohers.com', '273b3b-2.myshopify.com']
     ];
     for (var i = 0; i < stores.length; i++) {
       for (var j = 0; j < stores[i].length; j++) {
@@ -247,6 +248,72 @@
 
 
   // Store-specific selectors must never change the Paris classification.
+
+  // Impact selectors apply only to Yohers and its Shopify alias.
+  function isYohersStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)yohers\.com$/.test(hostname) ||
+        hostname === '273b3b-2.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyYohersModule(element) {
+    if (!isYohersStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('cart-drawer')) return 'cart_drawer';
+    if (cl('navigation-drawer')) return 'mobile_menu';
+    if (cl('search-drawer, predictive-search')) return 'search';
+    if (cl('store-header, .shopify-section--header')) return 'header_menu';
+    if (cl('.shopify-section-group-footer-group')) return 'footer';
+    if (cl('.shopify-section--announcement-bar')) return 'announcement_bar';
+    if (cl('.myrv, .jdgm-widget, [class*="myrv-"], [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('product-gallery, .pswp')) return 'pdp_gallery';
+    if (cl('.facets, facet-drawer, facet-sort-by, facet-dialog, facet-floating-filter')) return 'collection_filters';
+    if (cl('.product-info, variant-picker, variant-swatch-king, buy-buttons')) return 'pdp_purchase_area';
+    if (cl('product-card')) return 'product_list';
+    var slideshow = cl('.shopify-section--slideshow');
+    if (slideshow) return slideshow === document.querySelector('main .shopify-section--slideshow') ? 'hero_banner' : 'carousel';
+    if (cl('.shopify-section--collection-list')) return 'category_grid';
+    if (cl('.shopify-section--main-collection')) return 'collection_grid';
+    if (cl('scroll-carousel, product-list')) return 'carousel';
+    return null;
+  }
+
+  function getYohersActionName(element) {
+    if (!isYohersStorefront()) return '';
+    if (safeMatchesSelector(element, '.header__logo a')) return 'Brand Logo';
+    if (safeMatchesSelector(element, 'store-header button, store-header a, .shopify-section--footer button, button[is="product-zoom-button"], .pswp button')) {
+      var accessibleLabel = element.querySelector('.sr-only');
+      if (accessibleLabel && HAS_WORD.test(accessibleLabel.textContent || '')) return accessibleLabel.textContent.trim();
+    }
+    if (safeMatchesSelector(element, '.swatch-view-item[role="radio"]')) return element.getAttribute('orig-value') || element.getAttribute('aria-label') || '';
+    if (safeMatchesSelector(element, 'variant-picker input[type="radio"]')) return element.value || '';
+    if (safeMatchesSelector(element, '.quantity-selector__button[aria-label="Increase quantity"]')) return 'Qty Plus';
+    if (safeMatchesSelector(element, '.quantity-selector__button[aria-label="Decrease quantity"]')) return 'Qty Minus';
+    if (safeMatchesSelector(element, 'facet-drawer input[type="radio"], .facets input[type="checkbox"], facet-drawer input[type="checkbox"]')) {
+      var label = element.parentElement && element.parentElement.querySelector('label');
+      if (label && HAS_WORD.test(label.textContent || '')) return label.textContent.trim();
+      return element.value || '';
+    }
+    if (safeMatchesSelector(element, '.product-gallery__thumbnail, page-dots button')) {
+      var item = /Go to item\s+(\d+)/i.exec(element.getAttribute('aria-label') || element.textContent || '');
+      if (item) return 'Product Image ' + item[1];
+    }
+    if (safeMatchesSelector(element, '.product-gallery__media[data-media-type="image"]') && element.parentElement) {
+      return 'Product Image ' + (Array.prototype.indexOf.call(element.parentElement.children, element) + 1);
+    }
+    var card = safeClosest(element, 'product-card');
+    if (card && safeMatchesSelector(element, 'a')) {
+      var title = card.querySelector('.product-card__title');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    if (safeMatchesSelector(element, 'a.slideshow__slide') && !HAS_WORD.test(element.textContent || '')) {
+      var path = (element.getAttribute('href') || '').split('?')[0].split('/');
+      return (path[path.length - 1] || 'Shop Now').replace(/-/g, ' ');
+    }
+    return '';
+  }
 
   // Fabric selectors apply only to Vionva and its Shopify alias.
   function isVionvaStorefront() {
@@ -1032,7 +1099,7 @@
       if (!element) return 'unknown';
       function cl(sel) { return safeClosest(element, sel); }
       try {
-        var storefrontModule = identifyVionvaModule(element) || identifyOyrosyModule(element) || identifyOlivriaModule(element) || identifyOkloraModule(element) || identifyMooyiusModule(element) || identifyLiserieModule(element) || identifyGloeriaModule(element) || identifyFutarioModule(element) || identifyElevenOraModule(element) || identifyCrovayaModule(element) || identifyChicneryModule(element);
+        var storefrontModule = identifyYohersModule(element) || identifyVionvaModule(element) || identifyOyrosyModule(element) || identifyOlivriaModule(element) || identifyOkloraModule(element) || identifyMooyiusModule(element) || identifyLiserieModule(element) || identifyGloeriaModule(element) || identifyFutarioModule(element) || identifyElevenOraModule(element) || identifyCrovayaModule(element) || identifyChicneryModule(element);
         if (storefrontModule) return storefrontModule;
         if (cl('header.header, .header-section, .main-header-top, nav.nav-main-wrapper, #mobile-nav-menu, .drawer-mobile-menu, .site-nav-item, .header-icons-item, .navbar')) {
           return cl('.nav-grandmenu, .mega-menu, [class*="mega"]') ? 'mega_menu' : 'header_menu';
@@ -1169,7 +1236,7 @@
       var manual = link.getAttribute('data-ga-action-name');
       if (manual && manual.trim()) return manual.trim();
 
-      var storefrontText = getVionvaActionName(link) || getOyrosyActionName(link) || getOlivriaActionName(link) || getOkloraActionName(link) || getMooyiusActionName(link) || getLiserieActionName(link) || getGloeriaActionName(link) || getFutarioActionName(link) || getElevenOraActionName(link) || getCrovayaActionName(link) || getChicneryActionName(link);
+      var storefrontText = getYohersActionName(link) || getVionvaActionName(link) || getOyrosyActionName(link) || getOlivriaActionName(link) || getOkloraActionName(link) || getMooyiusActionName(link) || getLiserieActionName(link) || getGloeriaActionName(link) || getFutarioActionName(link) || getElevenOraActionName(link) || getCrovayaActionName(link) || getChicneryActionName(link);
       if (storefrontText) return storefrontText;
 
       var head = link.querySelector('.product-name, .product-title-wrapper, h1, h2, h3, h4, h5, h6');
