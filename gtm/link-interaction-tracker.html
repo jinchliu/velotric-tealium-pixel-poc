@@ -1,9 +1,9 @@
 <script>
 // ============================================================================
-// Modesees, Chicnery, Crovaya, ElevenOra, Futario, Gloeria, Liserie, Mooyius, Oklora, Olivria and Oyrosy - link tracking
+// Modesees, Chicnery, Crovaya, ElevenOra, Futario, Gloeria, Liserie, Mooyius, Oklora, Olivria, Oyrosy and Vionva - link tracking
 //
 // Paris rules remain the Modesees fallback. Hostname-scoped adapters support
-// Fashionopolism (Chicnery), Symmetry (Crovaya), Align (ElevenOra), Motion (Futario), Palo Alto (Gloeria/Ginariel), Prestige (Liserie) and Fashionopolism 9.5 (Mooyius) and Symmetry 8.3 (Oklora) and Symmetry 8.0 (Olivria), and Be Yours (Oyrosy).
+// Fashionopolism (Chicnery), Symmetry (Crovaya), Align (ElevenOra), Motion (Futario), Palo Alto (Gloeria/Ginariel), Prestige (Liserie) and Fashionopolism 9.5 (Mooyius) and Symmetry 8.3 (Oklora) and Symmetry 8.0 (Olivria), Be Yours (Oyrosy), and Fabric (Vionva).
 // GTM Custom HTML requires ES5 syntax here. Shared module and storefront label
 // helpers must match click-interaction-tracker.html.
 //
@@ -58,7 +58,8 @@
       ['mooyius.com', 'www.mooyius.com', '1a27ba-9d.myshopify.com'],
       ['oklora.com', 'www.oklora.com', '2zn2tj-iw.myshopify.com'],
       ['olivria.com', 'www.olivria.com', '2n2kev-xy.myshopify.com'],
-      ['oyrosy.com', 'www.oyrosy.com', 'service20220210.myshopify.com']
+      ['oyrosy.com', 'www.oyrosy.com', 'service20220210.myshopify.com'],
+      ['vionva.com', 'www.vionva.com', 's0isut-uw.myshopify.com']
     ];
     for (var i = 0; i < stores.length; i++) {
       for (var j = 0; j < stores[i].length; j++) {
@@ -246,6 +247,80 @@
 
 
   // Store-specific selectors must never change the Paris classification.
+
+  // Fabric selectors apply only to Vionva and its Shopify alias.
+  function isVionvaStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)vionva\.com$/.test(hostname) ||
+        hostname === 's0isut-uw.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyVionvaModule(element) {
+    if (!isVionvaStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('cart-drawer-component, #cart-drawer')) return 'cart_drawer';
+    if (cl('header-drawer')) return 'mobile_menu';
+    if (cl('predictive-search-component, #search-modal')) return 'search';
+    if (cl('header-component, header-menu')) return 'header_menu';
+    if (cl('.shopify-section-group-footer-group')) return 'footer';
+    if (cl('announcement-bar-component')) return 'announcement_bar';
+    if (cl('.myrv, .jdgm-widget, [class*="myrv-"], [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('media-gallery, zoom-dialog')) return 'pdp_gallery';
+    if (cl('facets-form-component, sorting-filter-component, #filters-drawer, .facets-toggle, .column-options')) return 'collection_filters';
+    if (cl('product-card')) return 'product_list';
+    if (cl('.product-details accordion-custom')) return 'pdp_accordion';
+    if (cl('.product-details, variant-picker, .globo-swatch-product-detail, product-form-component, sticky-add-to-cart, .quick-add-modal')) return 'pdp_purchase_area';
+    var hero = cl('.hero-wrapper');
+    if (hero) return hero === document.querySelector('main .hero-wrapper') ? 'hero_banner' : 'promo_tiles';
+    if (cl('.ui-test-collection-list')) return 'category_grid';
+    if (cl('results-list')) return 'collection_grid';
+    if (cl('slideshow-component, .ui-test-product-list')) return 'carousel';
+    return null;
+  }
+
+  function getVionvaActionName(element) {
+    if (!isVionvaStorefront()) return '';
+    if (safeMatchesSelector(element, '.header-logo')) return 'Brand Logo';
+    if (safeMatchesSelector(element, '.collection-card__link')) {
+      var collectionName = element.querySelector('.visually-hidden');
+      if (collectionName) return collectionName.textContent.trim();
+    }
+    if (safeMatchesSelector(element, 'summary.menu__heading')) {
+      var heading = element.querySelector('.menu__heading__default');
+      if (heading) return heading.textContent.trim();
+    }
+    if (safeMatchesSelector(element, '.quantity-plus')) return 'Qty Plus';
+    if (safeMatchesSelector(element, '.quantity-minus')) return 'Qty Minus';
+    if (safeMatchesSelector(element, 'variant-picker input[type="radio"], input[name^="globo-option-"]')) return element.value || '';
+    if (safeMatchesSelector(element, '.checkbox__input')) return element.getAttribute('data-label') || element.value || '';
+    if (safeMatchesSelector(element, '.column-options__option-input')) return element.getAttribute('aria-label') || element.value || '';
+    if (safeMatchesSelector(element, '.sorting-filter__input, .sorting-filter__option')) {
+      var option = safeClosest(element, '.sorting-filter__option');
+      var caption = option && option.querySelector('.sorting-filter__label');
+      return element.getAttribute('data-option-name') || (caption && caption.textContent.trim()) || '';
+    }
+    if (safeMatchesSelector(element, '.slideshow-controls__thumbnail')) {
+      var slide = /Slide\s+(\d+)\s+of/i.exec(element.getAttribute('aria-label') || '');
+      if (slide) return 'Product Image ' + slide[1];
+    }
+    if (safeMatchesSelector(element, '.product-media-container--zoomable, .dialog-thumbnails-list__thumbnail')) {
+      var index = /\/(?:open|handleThumbnailClick)\/(\d+)/.exec(element.getAttribute('on:click') || '');
+      if (index) return 'Product Image ' + (parseInt(index[1], 10) + 1);
+    }
+    var card = safeClosest(element, 'product-card');
+    if (card && safeMatchesSelector(element, 'a')) {
+      var title = card.querySelector('[ref="productTitleLink"], .product-grid-view-zoom-out--details h3');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    // Fabric's full-width hero link has no text or image child.
+    if (safeMatchesSelector(element, 'a.hero__link')) {
+      var path = (element.getAttribute('href') || '').split('?')[0].split('/');
+      return (path[path.length - 1] || 'Shop Now').replace(/-/g, ' ');
+    }
+    return '';
+  }
 
   // Be Yours selectors apply only to Oyrosy and its Shopify alias.
   function isOyrosyStorefront() {
@@ -957,7 +1032,7 @@
       if (!element) return 'unknown';
       function cl(sel) { return safeClosest(element, sel); }
       try {
-        var storefrontModule = identifyOyrosyModule(element) || identifyOlivriaModule(element) || identifyOkloraModule(element) || identifyMooyiusModule(element) || identifyLiserieModule(element) || identifyGloeriaModule(element) || identifyFutarioModule(element) || identifyElevenOraModule(element) || identifyCrovayaModule(element) || identifyChicneryModule(element);
+        var storefrontModule = identifyVionvaModule(element) || identifyOyrosyModule(element) || identifyOlivriaModule(element) || identifyOkloraModule(element) || identifyMooyiusModule(element) || identifyLiserieModule(element) || identifyGloeriaModule(element) || identifyFutarioModule(element) || identifyElevenOraModule(element) || identifyCrovayaModule(element) || identifyChicneryModule(element);
         if (storefrontModule) return storefrontModule;
         if (cl('header.header, .header-section, .main-header-top, nav.nav-main-wrapper, #mobile-nav-menu, .drawer-mobile-menu, .site-nav-item, .header-icons-item, .navbar')) {
           return cl('.nav-grandmenu, .mega-menu, [class*="mega"]') ? 'mega_menu' : 'header_menu';
@@ -1094,7 +1169,7 @@
       var manual = link.getAttribute('data-ga-action-name');
       if (manual && manual.trim()) return manual.trim();
 
-      var storefrontText = getOyrosyActionName(link) || getOlivriaActionName(link) || getOkloraActionName(link) || getMooyiusActionName(link) || getLiserieActionName(link) || getGloeriaActionName(link) || getFutarioActionName(link) || getElevenOraActionName(link) || getCrovayaActionName(link) || getChicneryActionName(link);
+      var storefrontText = getVionvaActionName(link) || getOyrosyActionName(link) || getOlivriaActionName(link) || getOkloraActionName(link) || getMooyiusActionName(link) || getLiserieActionName(link) || getGloeriaActionName(link) || getFutarioActionName(link) || getElevenOraActionName(link) || getCrovayaActionName(link) || getChicneryActionName(link);
       if (storefrontText) return storefrontText;
 
       var head = link.querySelector('.product-name, .product-title-wrapper, h1, h2, h3, h4, h5, h6');
