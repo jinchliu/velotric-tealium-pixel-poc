@@ -1,16 +1,17 @@
 <script>
 // ============================================================================
-// Modesees - link tracking, v1 (2026-08-19)
+// Modesees, Chicnery, Crovaya, ElevenOra, Futario, Gloeria, Liserie, Mooyius, Oklora, Olivria, Oyrosy, Vionva and Yohers - link tracking
 //
-// Ported from the Eco-Worthy link tracker v2 and retargeted at Shopify's
-// *Paris* theme. See click-interaction-tracker.html for the full list of
-// porting notes [P1]-[P7]; this file carries the same module chain verbatim.
+// Paris rules remain the Modesees fallback. Hostname-scoped adapters support
+// Fashionopolism (Chicnery), Symmetry (Crovaya), Align (ElevenOra), Motion (Futario), Palo Alto (Gloeria/Ginariel), Prestige (Liserie) and Fashionopolism 9.5 (Mooyius) and Symmetry 8.3 (Oklora) and Symmetry 8.0 (Olivria), Be Yours (Oyrosy), Fabric (Vionva), and Impact (Yohers).
+// GTM Custom HTML requires ES5 syntax here. Shared module and storefront label
+// helpers must match click-interaction-tracker.html.
 //
 // Two things are specific to this tag:
 //
-//   [L1] internalDomains now lists modesees, not eco-worthy. Getting this
-//        wrong does not raise an error - it silently reclassifies every
-//        on-site link as `external`.
+//   [L1] Select internal domains for the current storefront. Aliases stay
+//        internal, while links to the other brand remain external. Match
+//        complete hostnames or subdomains, never arbitrary substrings.
 //
 //   [L2] This tag fires on Initialization while the click tag fires on Page
 //        View, so this file always runs first. It therefore DEFINES
@@ -37,7 +38,38 @@
   window.dataLayer = window.dataLayer || [];
   var processedLinks = {};
   var currentDomain = '';
-  try { currentDomain = window.location.hostname; } catch (e) {}
+  try { currentDomain = window.location.hostname.toLowerCase(); } catch (e) {}
+
+  function hostnameMatchesDomain(hostname, domain) {
+    if (!hostname || !domain) return false;
+    return hostname === domain || hostname.slice(-(domain.length + 1)) === '.' + domain;
+  }
+
+  function getInternalDomains(hostname) {
+    var stores = [
+      ['modesees.com', 'www.modesees.com', 'yxz5tg-xz.myshopify.com',
+       'modesees-fs-test.myshopify.com'],
+      ['chicnery.com', 'www.chicnery.com', 'idn2mq-a7.myshopify.com'],
+      ['crovaya.com', 'www.crovaya.com', 'crovaya.myshopify.com'],
+      ['elevenora.com', 'www.elevenora.com', 'pnz00w-e1.myshopify.com'],
+      ['futario.com', 'www.futario.com', '8636f9-95.myshopify.com'],
+      ['ginariel.com', 'www.ginariel.com', 'menalvin.myshopify.com'],
+      ['liserie.com', 'www.liserie.com', '4hc40j-jr.myshopify.com'],
+      ['mooyius.com', 'www.mooyius.com', '1a27ba-9d.myshopify.com'],
+      ['oklora.com', 'www.oklora.com', '2zn2tj-iw.myshopify.com'],
+      ['olivria.com', 'www.olivria.com', '2n2kev-xy.myshopify.com'],
+      ['oyrosy.com', 'www.oyrosy.com', 'service20220210.myshopify.com'],
+      ['vionva.com', 'www.vionva.com', 's0isut-uw.myshopify.com'],
+      ['yohers.com', 'www.yohers.com', '273b3b-2.myshopify.com'],
+      ['zemurea.com', 'www.zemurea.com', 'zemurea.myshopify.com']
+    ];
+    for (var i = 0; i < stores.length; i++) {
+      for (var j = 0; j < stores[i].length; j++) {
+        if (hostnameMatchesDomain(hostname, stores[i][j])) return stores[i];
+      }
+    }
+    return hostname ? [hostname] : [];
+  }
 
   var config = {
     enablePageSourceParam: false, // rewrite hrefs to append page_source
@@ -56,12 +88,8 @@
       '[href="#"]', '[href="javascript:void(0)"]', '[href="javascript:;"]',
       '[data-ga-track="false"]'
     ],
-    // [L1] modesees, not eco-worthy.
-    internalDomains: [
-      'modesees.com',
-      'www.modesees.com',
-      'yxz5tg-xz.myshopify.com'
-    ],
+    // Storefronts share a Web GTM container but keep their own domain aliases.
+    internalDomains: getInternalDomains(currentDomain),
     trackOnlyTypes: [
       'external', 'tel', 'mailto', 'anchor', 'javascript'
     ]
@@ -219,11 +247,927 @@
     } catch (e) { return null; }
   }
 
+
+  // Store-specific selectors must never change the Paris classification.
+
+  // Release selectors apply only to Zemurea and its Shopify alias.
+  function isZemureaStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)zemurea\.com$/.test(hostname) ||
+        hostname === 'zemurea.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyZemureaModule(element) {
+    if (!isZemureaStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('cart-drawer')) return 'cart_drawer';
+    if (cl('quick-cart-drawer')) return 'pdp_purchase_area';
+    if (cl('header-drawer')) return 'mobile_menu';
+    if (cl('search-drawer, predictive-search')) return 'search';
+    if (cl('.section-header')) return 'header_menu';
+    if (cl('.shopify-section-group-footer-group')) return 'footer';
+    if (cl('.section-announcement-bar')) return 'announcement_bar';
+    if (cl('.jdgm-widget, [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('lb-upsell-widget, [class*="cbb-frequently-bought"]')) return 'frequently_bought';
+    if (cl('swiper-product-gallery, swiper-product-thumbs, .pswp')) return 'pdp_gallery';
+    if (cl('facet-filters-form')) return 'collection_filters';
+    if (cl('product-card')) return 'product_list';
+    if (cl('product-info, product-form, product-variant-selects, .product-bar')) return 'pdp_purchase_area';
+    var hero = cl('.section-hero-banner');
+    if (hero) return hero === document.querySelector('main .section-hero-banner') ? 'hero_banner' : 'carousel';
+    if (cl('.section__featured-collections, .card-collection')) return 'category_grid';
+    if (cl('.section-dual-tiles')) return 'promo_tiles';
+    if (cl('.section-collection')) return 'collection_grid';
+    if (cl('swiper-component, social-media-highlights-slider, .section--featured-products, .section--social-media-highlights')) return 'carousel';
+    return null;
+  }
+
+  function getZemureaActionName(element) {
+    if (!isZemureaStorefront()) return '';
+    if (safeMatchesSelector(element, '.header__logo a')) return 'Brand Logo';
+    if (safeMatchesSelector(element, '.section-announcement-bar a, .section-hero-banner a')) {
+      var ownText = (element.textContent || '').trim();
+      if (HAS_WORD.test(ownText)) return ownText;
+    }
+    if (safeMatchesSelector(element, '.quick-cart-drawer__trigger')) return 'Choose options';
+    if (safeMatchesSelector(element, '.product-option__input[type="radio"]')) return element.value || element.getAttribute('aria-label') || '';
+    if (safeMatchesSelector(element, '.quantity__button[name="plus"], .quantity__button[name="increment"]')) return 'Qty Plus';
+    if (safeMatchesSelector(element, '.quantity__button[name="minus"], .quantity__button[name="decrement"]')) return 'Qty Minus';
+    if (safeMatchesSelector(element, '.lb-card-checkbox, .cbb-frequently-bought-selector-input')) {
+      return (element.getAttribute('aria-label') || '').replace(/^Selection of\s+/i, '').replace(/\s+checkbox$/i, '');
+    }
+    if (safeMatchesSelector(element, '.product__gallery-toggle, swiper-product-thumbs .swiper-slide')) {
+      var slide = safeClosest(element, '.swiper-slide[data-index]');
+      var index = slide && slide.getAttribute('data-index');
+      if (index !== null && /^\d+$/.test(index || '')) return 'Product Image ' + (parseInt(index, 10) + 1);
+    }
+    var card = safeClosest(element, 'product-card');
+    if (card && safeMatchesSelector(element, 'a[data-product-link], a.product-card__link')) {
+      var title = card.querySelector('.product-card__title a, .product-card__title');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    if (safeMatchesSelector(element, '.section-dual-tiles__button-link')) {
+      var tile = safeClosest(element, '.section-dual-tiles__block');
+      var heading = tile && tile.querySelector('.section-dual-tiles__content h2, .section-dual-tiles__content h3, .section-dual-tiles__content h4, .section-dual-tiles__content h5');
+      if (heading && HAS_WORD.test(heading.textContent || '')) return heading.textContent.trim();
+    }
+    return '';
+  }
+
+  // Impact selectors apply only to Yohers and its Shopify alias.
+  function isYohersStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)yohers\.com$/.test(hostname) ||
+        hostname === '273b3b-2.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyYohersModule(element) {
+    if (!isYohersStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('cart-drawer')) return 'cart_drawer';
+    if (cl('navigation-drawer')) return 'mobile_menu';
+    if (cl('search-drawer, predictive-search')) return 'search';
+    if (cl('store-header, .shopify-section--header')) return 'header_menu';
+    if (cl('.shopify-section-group-footer-group')) return 'footer';
+    if (cl('.shopify-section--announcement-bar')) return 'announcement_bar';
+    if (cl('.myrv, .jdgm-widget, [class*="myrv-"], [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('product-gallery, .pswp')) return 'pdp_gallery';
+    if (cl('.facets, facet-drawer, facet-sort-by, facet-dialog, facet-floating-filter')) return 'collection_filters';
+    if (cl('.product-info, variant-picker, variant-swatch-king, buy-buttons')) return 'pdp_purchase_area';
+    if (cl('product-card')) return 'product_list';
+    var slideshow = cl('.shopify-section--slideshow');
+    if (slideshow) return slideshow === document.querySelector('main .shopify-section--slideshow') ? 'hero_banner' : 'carousel';
+    if (cl('.shopify-section--collection-list')) return 'category_grid';
+    if (cl('.shopify-section--main-collection')) return 'collection_grid';
+    if (cl('scroll-carousel, product-list')) return 'carousel';
+    return null;
+  }
+
+  function getYohersActionName(element) {
+    if (!isYohersStorefront()) return '';
+    if (safeMatchesSelector(element, '.header__logo a')) return 'Brand Logo';
+    if (safeMatchesSelector(element, 'store-header button, store-header a, .shopify-section--footer button, button[is="product-zoom-button"], .pswp button')) {
+      var accessibleLabel = element.querySelector('.sr-only');
+      if (accessibleLabel && HAS_WORD.test(accessibleLabel.textContent || '')) return accessibleLabel.textContent.trim();
+    }
+    if (safeMatchesSelector(element, '.swatch-view-item[role="radio"]')) return element.getAttribute('orig-value') || element.getAttribute('aria-label') || '';
+    if (safeMatchesSelector(element, 'variant-picker input[type="radio"]')) return element.value || '';
+    if (safeMatchesSelector(element, '.quantity-selector__button[aria-label="Increase quantity"]')) return 'Qty Plus';
+    if (safeMatchesSelector(element, '.quantity-selector__button[aria-label="Decrease quantity"]')) return 'Qty Minus';
+    if (safeMatchesSelector(element, 'facet-drawer input[type="radio"], .facets input[type="checkbox"], facet-drawer input[type="checkbox"]')) {
+      var label = element.parentElement && element.parentElement.querySelector('label');
+      if (label && HAS_WORD.test(label.textContent || '')) return label.textContent.trim();
+      return element.value || '';
+    }
+    if (safeMatchesSelector(element, '.product-gallery__thumbnail, page-dots button')) {
+      var item = /Go to item\s+(\d+)/i.exec(element.getAttribute('aria-label') || element.textContent || '');
+      if (item) return 'Product Image ' + item[1];
+    }
+    if (safeMatchesSelector(element, '.product-gallery__media[data-media-type="image"]') && element.parentElement) {
+      return 'Product Image ' + (Array.prototype.indexOf.call(element.parentElement.children, element) + 1);
+    }
+    var card = safeClosest(element, 'product-card');
+    if (card && safeMatchesSelector(element, 'a')) {
+      var title = card.querySelector('.product-card__title');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    if (safeMatchesSelector(element, 'a.slideshow__slide') && !HAS_WORD.test(element.textContent || '')) {
+      var path = (element.getAttribute('href') || '').split('?')[0].split('/');
+      return (path[path.length - 1] || 'Shop Now').replace(/-/g, ' ');
+    }
+    return '';
+  }
+
+  // Fabric selectors apply only to Vionva and its Shopify alias.
+  function isVionvaStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)vionva\.com$/.test(hostname) ||
+        hostname === 's0isut-uw.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyVionvaModule(element) {
+    if (!isVionvaStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('cart-drawer-component, #cart-drawer')) return 'cart_drawer';
+    if (cl('header-drawer')) return 'mobile_menu';
+    if (cl('predictive-search-component, #search-modal')) return 'search';
+    if (cl('header-component, header-menu')) return 'header_menu';
+    if (cl('.shopify-section-group-footer-group')) return 'footer';
+    if (cl('announcement-bar-component')) return 'announcement_bar';
+    if (cl('.myrv, .jdgm-widget, [class*="myrv-"], [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('media-gallery, zoom-dialog')) return 'pdp_gallery';
+    if (cl('facets-form-component, sorting-filter-component, #filters-drawer, .facets-toggle, .column-options')) return 'collection_filters';
+    if (cl('product-card')) return 'product_list';
+    if (cl('.product-details accordion-custom')) return 'pdp_accordion';
+    if (cl('.product-details, variant-picker, .globo-swatch-product-detail, product-form-component, sticky-add-to-cart, .quick-add-modal')) return 'pdp_purchase_area';
+    var hero = cl('.hero-wrapper');
+    if (hero) return hero === document.querySelector('main .hero-wrapper') ? 'hero_banner' : 'promo_tiles';
+    if (cl('.ui-test-collection-list')) return 'category_grid';
+    if (cl('results-list')) return 'collection_grid';
+    if (cl('slideshow-component, .ui-test-product-list')) return 'carousel';
+    return null;
+  }
+
+  function getVionvaActionName(element) {
+    if (!isVionvaStorefront()) return '';
+    if (safeMatchesSelector(element, '.header-logo')) return 'Brand Logo';
+    if (safeMatchesSelector(element, '.collection-card__link')) {
+      var collectionName = element.querySelector('.visually-hidden');
+      if (collectionName) return collectionName.textContent.trim();
+    }
+    if (safeMatchesSelector(element, 'summary.menu__heading')) {
+      var heading = element.querySelector('.menu__heading__default');
+      if (heading) return heading.textContent.trim();
+    }
+    if (safeMatchesSelector(element, '.quantity-plus')) return 'Qty Plus';
+    if (safeMatchesSelector(element, '.quantity-minus')) return 'Qty Minus';
+    if (safeMatchesSelector(element, 'variant-picker input[type="radio"], input[name^="globo-option-"]')) return element.value || '';
+    if (safeMatchesSelector(element, '.checkbox__input')) return element.getAttribute('data-label') || element.value || '';
+    if (safeMatchesSelector(element, '.column-options__option-input')) return element.getAttribute('aria-label') || element.value || '';
+    if (safeMatchesSelector(element, '.sorting-filter__input, .sorting-filter__option')) {
+      var option = safeClosest(element, '.sorting-filter__option');
+      var caption = option && option.querySelector('.sorting-filter__label');
+      return element.getAttribute('data-option-name') || (caption && caption.textContent.trim()) || '';
+    }
+    if (safeMatchesSelector(element, '.slideshow-controls__thumbnail')) {
+      var slide = /Slide\s+(\d+)\s+of/i.exec(element.getAttribute('aria-label') || '');
+      if (slide) return 'Product Image ' + slide[1];
+    }
+    if (safeMatchesSelector(element, '.product-media-container--zoomable, .dialog-thumbnails-list__thumbnail')) {
+      var index = /\/(?:open|handleThumbnailClick)\/(\d+)/.exec(element.getAttribute('on:click') || '');
+      if (index) return 'Product Image ' + (parseInt(index[1], 10) + 1);
+    }
+    var card = safeClosest(element, 'product-card');
+    if (card && safeMatchesSelector(element, 'a')) {
+      var title = card.querySelector('[ref="productTitleLink"], .product-grid-view-zoom-out--details h3');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    // Fabric's full-width hero link has no text or image child.
+    if (safeMatchesSelector(element, 'a.hero__link')) {
+      var path = (element.getAttribute('href') || '').split('?')[0].split('/');
+      return (path[path.length - 1] || 'Shop Now').replace(/-/g, ' ');
+    }
+    return '';
+  }
+
+  // Be Yours selectors apply only to Oyrosy and its Shopify alias.
+  function isOyrosyStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)oyrosy\.com$/.test(hostname) ||
+        hostname === 'service20220210.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyOyrosyModule(element) {
+    if (!isOyrosyStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('mini-cart, .cart-drawer')) return 'cart_drawer';
+    if (cl('.menu-drawer, .menu-drawer-container')) return 'mobile_menu';
+    if (cl('.search-modal, predictive-search, .predictive-search')) return 'search';
+    if (cl('header, .shopify-section-header')) return 'header_menu';
+    if (cl('footer, .shopify-section-group-footer-group')) return 'footer';
+    if (cl('announcement-bar, .shopify-section-announcement-bar')) return 'announcement_bar';
+    if (cl('.myrv, .jdgm-widget, [class*="myrv-"], [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('media-gallery, product-gallery, thumbnail-slider, product-modal')) return 'pdp_gallery';
+    if (cl('facet-filters-form, facet-drawer, .facets, .mobile-facets')) return 'collection_filters';
+    if (cl('.product__accordion')) return 'pdp_accordion';
+    if (cl('product-form, variant-selects, .product__info-container, quick-view, quick-view-drawer')) return 'pdp_purchase_area';
+    if (cl('.card-wrapper')) return 'product_list';
+    var slideshow = cl('slideshow-component');
+    if (slideshow) {
+      return slideshow === document.querySelector('main slideshow-component')
+        ? 'hero_banner' : 'carousel';
+    }
+    if (cl('[id*="__gallery_"]')) return 'category_grid';
+    if (cl('[id*="__double_image_"], [id*="__image_grid_"], .section-final-few-size-bar')) return 'promo_tiles';
+    if (cl('.pagination-wrapper, #ProductGridContainer')) return 'collection_grid';
+    if (cl('slider-component')) return 'carousel';
+    return null;
+  }
+
+  function getOyrosyActionName(element) {
+    if (!isOyrosyStorefront()) return '';
+    if (safeMatchesSelector(element, '.header__heading-link')) return 'Brand Logo';
+    if (safeMatchesSelector(element, '.list-social__link')) {
+      var socialName = element.querySelector('.visually-hidden');
+      if (socialName) return socialName.textContent.trim();
+    }
+    if (safeMatchesSelector(element, 'drawer-close-button')) return 'Close menu';
+    if (safeMatchesSelector(element, '.menu-drawer__close-button')) return 'Back';
+    if (safeMatchesSelector(element, '.quantity__button[name="plus"]')) return 'Qty Plus';
+    if (safeMatchesSelector(element, '.quantity__button[name="minus"]')) return 'Qty Minus';
+    if (safeMatchesSelector(element, 'variant-selects input[type="radio"]')) return element.value || '';
+    if (safeMatchesSelector(element, 'facet-filters-form input[type="radio"], facet-filters-form input[type="checkbox"], facet-drawer input[type="radio"], facet-drawer input[type="checkbox"]')) {
+      var option = safeClosest(element, '.facets__item, .mobile-facets__item');
+      var label = option && option.querySelector('label');
+      if (label && HAS_WORD.test(label.textContent || '')) return label.textContent.trim();
+      return element.value || '';
+    }
+    if (safeMatchesSelector(element, '.product__media-toggle')) {
+      var media = safeClosest(element, '[data-media-position]');
+      if (media) return 'Product Image ' + media.getAttribute('data-media-position');
+    }
+    var card = safeClosest(element, '.card-wrapper');
+    if (card && safeMatchesSelector(element, 'a')) {
+      var swatch = safeClosest(element, 'color-swatch');
+      if (swatch) return swatch.getAttribute('title') || '';
+      var title = card.querySelector('.card-information__text');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    // Hero image links contain only a non-breaking space and empty image alts.
+    if (safeClosest(element, 'slideshow-component') && safeMatchesSelector(element, 'a')) {
+      var text = (element.textContent || '').trim();
+      if (!HAS_WORD.test(text)) {
+        var path = (element.getAttribute('href') || '').split('?')[0].split('/');
+        return (path[path.length - 1] || 'Shop Now').replace(/-/g, ' ');
+      }
+    }
+    return '';
+  }
+
+  // Symmetry 8.0 selectors apply only to Olivria and its Shopify alias.
+  function isOlivriaStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)olivria\.com$/.test(hostname) ||
+        hostname === '2n2kev-xy.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyOlivriaModule(element) {
+    if (!isOlivriaStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('cart-drawer, .cart-drawer')) return 'cart_drawer';
+    if (cl('.mobile-navigation-drawer')) return 'mobile_menu';
+    if (cl('.section-header, page-header, main-navigation')) return 'header_menu';
+    if (cl('.section-footer, .shopify-section-group-footer-group')) return 'footer';
+    if (cl('.section-announcement-bar, announcement-bar')) return 'announcement_bar';
+    if (cl('.myrv, .jdgm-widget, [class*="myrv-"], [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('media-gallery, .product-media-wrapper')) return 'pdp_gallery';
+    if (cl('product-block, .product-block')) return 'product_list';
+    if (cl('.filter-group, .filter-toggle, .filters, .filter-shade, [data-toggle-filters]')) return 'collection_filters';
+    if (cl('.product-form, buy-buttons, variant-picker, sticky-atc')) return 'pdp_purchase_area';
+    var slideshow = cl('.section-slideshow');
+    if (slideshow) {
+      return slideshow === document.querySelector('main .section-slideshow')
+        ? 'hero_banner' : 'carousel';
+    }
+    if (cl('.section-background-video')) return 'background_video';
+    if (cl('.section-custom-content, .section-rich-text')) return 'content_block';
+    if (cl('.section-gallery')) return 'promo_tiles';
+    if (cl('.section-image-with-text-overlay, .section-compact-messages')) return 'promo_banner';
+    if (cl('.section-testimonials')) return 'customer_reviews';
+    if (cl('.collection-listing')) return 'collection_grid';
+    if (cl('slide-show, carousel-slider')) return 'carousel';
+    return null;
+  }
+
+  function getOlivriaActionName(element) {
+    if (!isOlivriaStorefront()) return '';
+    if (safeMatchesSelector(element, '.logo__link')) return 'Brand Logo';
+    if (safeMatchesSelector(element, 'a[data-quantity="up"]')) return 'Qty Plus';
+    if (safeMatchesSelector(element, 'a[data-quantity="down"]')) return 'Qty Minus';
+    if (safeMatchesSelector(element, 'input.js-option')) return element.value || '';
+    if (safeMatchesSelector(element, '.filter-group__checkbox, .filter-toggle__input')) {
+      var label = safeClosest(element, 'label');
+      var caption = label && label.querySelector('.filter-group__item__text, .filter-toggle__input-label-text');
+      if (caption && HAS_WORD.test(caption.textContent || '')) return caption.textContent.trim();
+      return element.value || '';
+    }
+    if (safeMatchesSelector(element, 'a.thumbnail, a.show-gallery')) {
+      var item = safeClosest(element, '.slider__item');
+      if (item && item.parentElement) {
+        return 'Product Image ' + (Array.prototype.indexOf.call(item.parentElement.children, item) + 1);
+      }
+    }
+    var card = safeClosest(element, 'product-block, .product-block');
+    if (card && safeMatchesSelector(element, 'a.product-link')) {
+      var title = card.querySelector('.product-block__title');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    return '';
+  }
+
+  // Symmetry 8.3 selectors apply only to Oklora and its Shopify alias.
+  function isOkloraStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)oklora\.com$/.test(hostname) ||
+        hostname === '2zn2tj-iw.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyOkloraModule(element) {
+    if (!isOkloraStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('cart-drawer, .cart-drawer')) return 'cart_drawer';
+    if (cl('.mobile-navigation-drawer')) return 'mobile_menu';
+    if (cl('.section-header, page-header, main-navigation')) return 'header_menu';
+    if (cl('.section-footer')) return 'footer';
+    if (cl('.section-announcement-bar, announcement-bar')) return 'announcement_bar';
+    if (cl('.myrv, .jdgm-widget, [class*="myrv-"], [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('media-gallery, .product-media-wrapper')) return 'pdp_gallery';
+    if (cl('product-block, .product-block')) return 'product_list';
+    if (cl('.filter-group, .filter-toggle, .filters, .filter-shade, [data-toggle-filters]')) return 'collection_filters';
+    if (cl('.product-form, buy-buttons, variant-picker, sticky-atc')) return 'pdp_purchase_area';
+    var slideshow = cl('.section-slideshow');
+    if (slideshow) {
+      return slideshow === document.querySelector('main .section-slideshow')
+        ? 'hero_banner' : 'carousel';
+    }
+    if (cl('.section-gallery')) return 'promo_tiles';
+    if (cl('.section-image-with-text-overlay, .section-compact-messages')) return 'promo_banner';
+    if (cl('.section-testimonials')) return 'customer_reviews';
+    if (cl('.collection-listing')) return 'collection_grid';
+    if (cl('slide-show, carousel-slider')) return 'carousel';
+    return null;
+  }
+
+  function getOkloraActionName(element) {
+    if (!isOkloraStorefront()) return '';
+    if (safeMatchesSelector(element, '.logo__link')) return 'Brand Logo';
+    if (safeMatchesSelector(element, 'a[data-quantity="up"]')) return 'Qty Plus';
+    if (safeMatchesSelector(element, 'a[data-quantity="down"]')) return 'Qty Minus';
+    if (safeMatchesSelector(element, 'input.js-option')) return element.value || '';
+    if (safeMatchesSelector(element, '.filter-group__checkbox, .filter-toggle__input')) {
+      var label = safeClosest(element, 'label');
+      var caption = label && label.querySelector('.filter-group__item__text, .filter-toggle__input-label-text');
+      if (caption && HAS_WORD.test(caption.textContent || '')) return caption.textContent.trim();
+      return element.value || '';
+    }
+    if (safeMatchesSelector(element, 'a.thumbnail, a.show-gallery')) {
+      var item = safeClosest(element, '.slider__item');
+      if (item && item.parentElement) {
+        return 'Product Image ' + (Array.prototype.indexOf.call(item.parentElement.children, item) + 1);
+      }
+    }
+    var card = safeClosest(element, 'product-block, .product-block');
+    if (card && safeMatchesSelector(element, 'a.product-link')) {
+      var title = card.querySelector('.product-block__title');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    return '';
+  }
+
+  // Fashionopolism 9.5 selectors apply only to Mooyius and its Shopify alias.
+  function isMooyiusStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)mooyius\.com$/.test(hostname) ||
+        hostname === '1a27ba-9d.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyMooyiusModule(element) {
+    if (!isMooyiusStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('#slideout-ajax-cart, #mini-cart, .mini-cart')) return 'cart_drawer';
+    if (cl('#shopify-section-mobile-navigation, nav.mobile-menu')) return 'mobile_menu';
+    if (cl('.announcement__bar-section')) return 'announcement_bar';
+    if (cl('.header-section, .theme-header')) return 'header_menu';
+    if (cl('.shopify-section-group-footer-group')) return 'footer';
+    if (cl('.myrv, .jdgm-widget, [class*="myrv-"], [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('.collection__page-filter, .collection__horizontal-toolbar, .collection__filtering, .sort-by__wrapper')) return 'collection_filters';
+    if (cl('.product__section-images, .product__gallery--container, .js-thumb-item')) return 'pdp_gallery';
+    if (cl('.product-index, .js-product-listing')) return 'product_list';
+    if (cl('.product__section-details, .product__form-container, .product__form-buttons, .product__variants-swatches')) return 'pdp_purchase_area';
+    if (cl('.collection__list-item')) return 'category_grid';
+    if (cl('.gallery__section')) return 'promo_tiles';
+    if (cl('.slideshow-section')) {
+      return cl('[id^="shopify-section-template--"][id$="__slideshow"]')
+        ? 'hero_banner' : 'carousel';
+    }
+    if (cl('.collection__page-products')) return 'collection_grid';
+    return null;
+  }
+
+  function getMooyiusActionName(element) {
+    if (!isMooyiusStorefront()) return '';
+    if (safeClosest(element, '#logo, .theme__logo')) return 'Brand Logo';
+    if (safeMatchesSelector(element, '.swatches__form--input')) return element.value || '';
+    if (safeMatchesSelector(element, '.swatch-view-item[role="radio"]')) return element.getAttribute('orig-value') || element.getAttribute('aria-label') || '';
+    if (safeMatchesSelector(element, 'input.js-hz-filter-input[readonly]')) {
+      return element.getAttribute('data-placeholder') || element.getAttribute('placeholder') || 'Filter';
+    }
+    if (safeMatchesSelector(element, '.js-hz-filter-list input')) {
+      var optionLabel = element.parentElement && element.parentElement.querySelector('label');
+      if (optionLabel) {
+        var caption = (optionLabel.textContent || '').replace(/\s*\(\d+\)\s*$/, '').trim();
+        if (HAS_WORD.test(caption)) return caption;
+      }
+    }
+    var thumbnail = safeClosest(element, '.js-thumb-item');
+    if (thumbnail) {
+      var index = parseInt(thumbnail.getAttribute('data-slide-index'), 10);
+      if (!isNaN(index)) return 'Product Image ' + (index + 1);
+    }
+    if (safeMatchesSelector(element, '.quantity-control-up')) return 'Qty Plus';
+    if (safeMatchesSelector(element, '.quantity-control-down')) return 'Qty Minus';
+    var card = safeClosest(element, '.product-index, .js-product-listing');
+    if (card && safeMatchesSelector(element, 'a[href*="/products/"]')) {
+      var title = card.getAttribute('data-alpha');
+      if (title && HAS_WORD.test(title)) return title.trim();
+      var heading = card.querySelector('.product-info h2');
+      if (heading && HAS_WORD.test(heading.textContent || '')) return heading.textContent.trim();
+    }
+    if (safeMatchesSelector(element, 'a, button, summary, [role="button"]') && element.querySelector('svg')) {
+      var clone = element.cloneNode(true);
+      var icons = clone.querySelectorAll('svg');
+      for (var i = 0; i < icons.length; i++) {
+        if (icons[i].parentNode) icons[i].parentNode.removeChild(icons[i]);
+      }
+      var text = (clone.textContent || '').trim();
+      if (HAS_WORD.test(text)) return text;
+    }
+    return '';
+  }
+
+  // Prestige selectors apply only to Liserie and its Shopify alias.
+  function isLiserieStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)liserie\.com$/.test(hostname) ||
+        hostname === '4hc40j-jr.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyLiserieModule(element) {
+    if (!isLiserieStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('cart-drawer')) return 'cart_drawer';
+    if (cl('header-sidebar')) return 'mobile_menu';
+    if (cl('header-search')) return 'search_panel';
+    if (cl('x-header, .shopify-section--header')) return 'header_menu';
+    if (cl('.shopify-section-group-footer-group')) return 'footer';
+    if (cl('.myrv, .jdgm-widget, [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('product-gallery, .pswp')) return 'pdp_gallery';
+    if (cl('.product-info, product-sticky-bar')) return 'pdp_purchase_area';
+    if (cl('product-card, quick-buy-modal')) return 'product_list';
+    if (cl('.collection-toolbar, facets-sort-popover')) return 'collection_filters';
+    var slideshow = cl('.shopify-section--slideshow');
+    if (slideshow) {
+      return slideshow === document.querySelector('main .shopify-section--slideshow')
+        ? 'hero_banner' : 'carousel';
+    }
+    if (cl('.shopify-section--collection-list')) return 'category_grid';
+    if (cl('.shopify-section--media-grid')) return 'promo_tiles';
+    if (cl('scroll-carousel, carousel-navigation, .shopify-section--featured-collections, .shopify-section--shop-the-look')) return 'carousel';
+    if (cl('.shopify-section--main-collection')) return 'collection_grid';
+    if (cl('.shopify-section--newsletter')) return 'newsletter';
+    return null;
+  }
+
+  function getLiserieActionName(element) {
+    if (!isLiserieStorefront()) return '';
+    if (safeMatchesSelector(element, 'a.header__logo')) return 'Brand Logo';
+    var navTitle = element.getAttribute('data-title');
+    if (navTitle && HAS_WORD.test(navTitle)) return navTitle.trim();
+    if (safeMatchesSelector(element, 'product-card input[type="radio"], variant-picker input[type="radio"]')) {
+      // Prestige stores numeric option IDs as values; use the visible label.
+      var label = element.nextElementSibling;
+      if (label && label.tagName === 'LABEL' && label.getAttribute('for') === element.id) {
+        var caption = (label.textContent || '').trim();
+        if (HAS_WORD.test(caption)) return caption;
+      }
+      return element.getAttribute('aria-label') || 'Variant';
+    }
+    if (safeMatchesSelector(element, '.quantity-selector__button')) {
+      var quantityText = element.textContent || '';
+      if (/increase/i.test(quantityText)) return 'Qty Plus';
+      if (/decrease/i.test(quantityText)) return 'Qty Minus';
+    }
+    if (safeMatchesSelector(element, '.product-gallery__thumbnail[data-media-position]')) {
+      return 'Product Image ' + element.getAttribute('data-media-position');
+    }
+    if (safeMatchesSelector(element, '.product-gallery__media[data-media-type="image"]')) {
+      var mediaPosition = /Item\s+(\d+)\s+of/i.exec(element.getAttribute('aria-label') || '');
+      if (mediaPosition) return 'Product Image ' + mediaPosition[1];
+    }
+    if (safeMatchesSelector(element, 'carousel-navigation button')) {
+      var page = /Go to item\s+(\d+)/i.exec(element.textContent || '');
+      if (page) return (safeClosest(element, 'product-gallery') ? 'Product Image ' : 'Slide ') + page[1];
+    }
+    if (safeMatchesSelector(element, '.product-card__quick-add-button')) return 'Choose options';
+    var card = safeClosest(element, 'product-card');
+    if (card && safeMatchesSelector(element, 'a[href*="/products/"]')) {
+      var title = card.querySelector('.product-title');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    if (safeMatchesSelector(element, 'a, button, summary, [role="button"]') && element.querySelector('svg')) {
+      var clone = element.cloneNode(true);
+      var icons = clone.querySelectorAll('svg');
+      for (var i = 0; i < icons.length; i++) {
+        if (icons[i].parentNode) icons[i].parentNode.removeChild(icons[i]);
+      }
+      var text = (clone.textContent || '').trim();
+      if (HAS_WORD.test(text)) return text;
+    }
+    return '';
+  }
+
+  // Gloeria's configured storefront is Ginariel, using Palo Alto selectors.
+  function isGloeriaStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)ginariel\.com$/.test(hostname) ||
+        hostname === 'menalvin.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyGloeriaModule(element) {
+    if (!isGloeriaStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('#cart-drawer, .cart-drawer')) return 'cart_drawer';
+    if (cl('mobile-menu, .shopify-section-mobile-menu')) return 'mobile_menu';
+    if (cl('.announcement-bar-static')) return 'announcement_bar';
+    if (cl('#SiteHeader, .shopify-section-header')) return 'header_menu';
+    if (cl('.section-footer, .shopify-section-group-group-footer')) return 'footer';
+    if (cl('.myrv, .jdgm-widget, [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('.product-gallery, .product-single__thumbnails, .pswp')) return 'pdp_gallery';
+    if (cl('.product-single__details')) return 'pdp_purchase_area';
+    if (cl('.product-grid-item')) return 'product_list';
+    if (cl('.collection__sort-bar, .collection__sticky-bar')) return 'collection_filters';
+    var slideshow = cl('.shopify-section.slideshow');
+    if (slideshow) {
+      return slideshow === document.querySelector('#MainContent .shopify-section.slideshow')
+        ? 'hero_banner' : 'carousel';
+    }
+    if (cl('.mosaic__item')) return 'category_grid';
+    if (cl('[id^="SectionPromotionRow--"]')) return 'promo_tiles';
+    if (cl('.flickity-enabled')) return 'carousel';
+    if (cl('.collection-section')) return 'collection_grid';
+    return null;
+  }
+
+  function getGloeriaActionName(element) {
+    if (!isGloeriaStorefront()) return '';
+    if (safeMatchesSelector(element, 'a.logo__image-link')) return 'Brand Logo';
+    if (safeMatchesSelector(element, '.product__selectors input[type="radio"]')) return element.value || '';
+    if (safeMatchesSelector(element, '.collection__sort__input')) {
+      var sortLabel = element.parentElement && element.parentElement.querySelector('.collection__sort__button');
+      return sortLabel ? (sortLabel.textContent || '').trim() : (element.value || '');
+    }
+    if (safeMatchesSelector(element, '.swatch-view-item[role="radio"]')) {
+      return element.getAttribute('orig-value') || element.getAttribute('aria-label') || '';
+    }
+    if (safeMatchesSelector(element, '.cl-type-swatch[role="radio"]')) return (element.textContent || '').trim();
+    if (safeMatchesSelector(element, '[data-quantity-plus]')) return 'Qty Plus';
+    if (safeMatchesSelector(element, '[data-quantity-minus]')) return 'Qty Minus';
+    if (safeMatchesSelector(element, '.btn-quick-buy')) return 'Quick Buy';
+    if (safeMatchesSelector(element, '.product__submit__add')) return 'Add to cart';
+    var thumbnail = safeClosest(element, '.product-single__thumbnail');
+    var thumbs = thumbnail && safeClosest(thumbnail, '.product-single__thumbnails');
+    if (thumbs) {
+      return 'Product Image ' + (Array.prototype.indexOf.call(thumbs.querySelectorAll('.product-single__thumbnail'), thumbnail) + 1);
+    }
+    var slide = safeClosest(element, '.product-gallery__media-slide');
+    var gallery = slide && safeClosest(slide, '.product-gallery__media-slider');
+    if (gallery) {
+      return 'Product Image ' + (Array.prototype.indexOf.call(gallery.querySelectorAll('.product-gallery__media-slide'), slide) + 1);
+    }
+    var card = safeClosest(element, '.product-grid-item');
+    if (card && safeMatchesSelector(element, 'a[href*="/products/"]')) {
+      var title = card.querySelector('.product-grid-item__title');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    if (safeMatchesSelector(element, 'a, button, summary, [role="button"]') && element.querySelector('svg')) {
+      var clone = element.cloneNode(true);
+      var icons = clone.querySelectorAll('svg');
+      for (var i = 0; i < icons.length; i++) {
+        if (icons[i].parentNode) icons[i].parentNode.removeChild(icons[i]);
+      }
+      var text = (clone.textContent || '').trim();
+      if (HAS_WORD.test(text)) return text;
+    }
+    return '';
+  }
+
+  // Motion selectors apply only to Futario and its Shopify alias.
+  function isFutarioStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)futario\.com$/.test(hostname) ||
+        hostname === '8636f9-95.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyFutarioModule(element) {
+    if (!isFutarioStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('#CartDrawer')) return 'cart_drawer';
+    if (cl('#NavDrawer, .mobile-nav')) return 'mobile_menu';
+    if (cl('.announcement')) return 'announcement_bar';
+    if (cl('#SiteHeader, #HeaderWrapper')) return 'header_menu';
+    if (cl('.shopify-section-group-footer-group')) return 'footer';
+    if (cl('.jdgm-widget, .jdgm-rev-widg, [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('.product__photos, .pswp')) return 'pdp_gallery';
+    if (cl('.product-single__meta')) return 'pdp_purchase_area';
+    if (cl('.grid-product')) return 'product_list';
+    if (cl('#FilterDrawer, .filter-form, .collection-filter')) return 'collection_filters';
+    var hero = cl('.index-section--hero');
+    if (hero) {
+      // Secondary Motion slideshows must not fire the homepage banner tag.
+      return hero === document.querySelector('#MainContent .index-section--hero')
+        ? 'hero_banner' : 'carousel';
+    }
+    if (cl('[class*="ai-image-grid-link-"]')) return 'category_grid';
+    if (cl('[class*="ai-split-screen-"], [id*="__background_image_text_"]')) return 'promo_banner';
+    if (cl('[id*="__blog_posts_"]')) return 'blog_list';
+    if (cl('.slideshow-wrapper, .flickity-enabled')) return 'carousel';
+    if (cl('#CollectionAjaxContent')) return 'collection_grid';
+    return null;
+  }
+
+  function getFutarioActionName(element) {
+    if (!isFutarioStorefront()) return '';
+    if (safeMatchesSelector(element, '#LogoContainer a')) return 'Brand Logo';
+    if (safeMatchesSelector(element, '.variant-input input[type="radio"]')) return element.value || '';
+    if (safeMatchesSelector(element, '.tag__input[type="checkbox"]')) {
+      var label = safeClosest(element, 'label');
+      var caption = label && label.querySelector('.tag__text');
+      return caption ? (caption.textContent || '').trim() : (element.value || '');
+    }
+    if (safeMatchesSelector(element, '.js-qty__adjust--plus')) return 'Qty Plus';
+    if (safeMatchesSelector(element, '.js-qty__adjust--minus')) return 'Qty Minus';
+    if (safeMatchesSelector(element, '.product__photo-zoom')) return 'Zoom in';
+    if (safeMatchesSelector(element, '.flickity-next')) return 'Next Slide';
+    if (safeMatchesSelector(element, '.flickity-previous')) return 'Previous Slide';
+    if (safeMatchesSelector(element, '.quick-product__btn')) return 'Quick view';
+    if (safeMatchesSelector(element, '.product__thumb[data-index]')) {
+      var index = parseInt(element.getAttribute('data-index'), 10);
+      if (!isNaN(index)) return 'Product Image ' + (index + 1);
+    }
+    var card = safeClosest(element, '.grid-product');
+    if (card && safeMatchesSelector(element, 'a.grid-product__link')) {
+      var title = card.querySelector('.grid-product__title');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    var labelledBy = element.getAttribute('aria-labelledby');
+    if (labelledBy) {
+      var names = labelledBy.split(/\s+/).map(function(id) {
+        var node = document.getElementById(id);
+        return node ? (node.textContent || '').trim() : '';
+      }).join(' ').trim();
+      if (HAS_WORD.test(names)) return names;
+    }
+    // Motion embeds SVG <title> text such as icon-X in otherwise useful labels.
+    if (safeMatchesSelector(element, 'a, button, summary, [role="button"]') && element.querySelector('svg')) {
+      var clone = element.cloneNode(true);
+      var icons = clone.querySelectorAll('svg');
+      for (var i = 0; i < icons.length; i++) {
+        if (icons[i].parentNode) icons[i].parentNode.removeChild(icons[i]);
+      }
+      var text = (clone.textContent || '').trim();
+      if (HAS_WORD.test(text)) return text;
+    }
+    return '';
+  }
+
+  // Align selectors apply only to ElevenOra and its Shopify alias.
+  function isElevenOraStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)elevenora\.com$/.test(hostname) ||
+        hostname === 'pnz00w-e1.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyElevenOraModule(element) {
+    if (!isElevenOraStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('#mini-cart, .mini-cart')) return 'cart_drawer';
+    if (cl('.nav--mobile')) return 'mobile_menu';
+    if (cl('.announcement-bar')) return 'announcement_bar';
+    if (cl('.main-navigation')) return 'header_menu';
+    if (cl('.shopify-section-group-main-footer')) return 'footer';
+    if (cl('.jdgm-widget, .jdgm-rev-widg, [class*="jdgm-"]')) return 'product_reviews';
+    if (cl('.main-product__media, .main-product__media-wrapper')) return 'pdp_gallery';
+    if (cl('.card--product')) return 'product_list';
+    if (cl('facet-filters-form, .facet-form')) return 'collection_filters';
+    if (cl('.main-product__content, .main-product__blocks')) return 'pdp_purchase_area';
+    var banner = cl('.shopify-section.banner');
+    if (banner) {
+      // Only the first standalone banner is the homepage hero.
+      return banner === document.querySelector('main .shopify-section.banner')
+        ? 'hero_banner' : 'promo_banner';
+    }
+    if (cl('.grid-content .banner__wrapper')) return 'category_grid';
+    if (cl('swiper-container, .swiper-pagination, .grid-content')) return 'carousel';
+    if (cl('.shopify-section.collection')) return 'collection_grid';
+    return null;
+  }
+
+  function getElevenOraActionName(element) {
+    if (!isElevenOraStorefront()) return '';
+    if (safeMatchesSelector(element, 'a') && element.querySelector('.header__logo')) return 'Brand Logo';
+    if (safeMatchesSelector(element, '.main-product__variant-selector input[type="radio"]')) return element.value || '';
+    if (safeMatchesSelector(element, '.quantity button[name="plus"]')) return 'Qty Plus';
+    if (safeMatchesSelector(element, '.quantity button[name="minus"]')) return 'Qty Minus';
+    if (safeMatchesSelector(element, 'button[name="add"].button--add-to-cart')) return 'Add to cart';
+    if (safeMatchesSelector(element, '.swiper-button-next')) return 'Next Slide';
+    if (safeMatchesSelector(element, '.swiper-button-prev')) return 'Previous Slide';
+    if (safeMatchesSelector(element, '.swiper-pagination-bullet')) {
+      var page = /go to slide\s+(\d+)/i.exec(element.getAttribute('aria-label') || '');
+      if (page) {
+        return safeClosest(element, '.main-product__media')
+          ? 'Product Image ' + page[1] : 'Slide ' + page[1];
+      }
+    }
+    if (safeMatchesSelector(element, '.main-product__gallery-item')) {
+      var slides = element.parentElement && element.parentElement.querySelectorAll('swiper-slide');
+      if (slides) return 'Product Image ' + (Array.prototype.indexOf.call(slides, element) + 1);
+    }
+    var card = safeClosest(element, '.card--product');
+    if (card && safeMatchesSelector(element, 'a')) {
+      var image = card.querySelector('.card__image img[alt]');
+      var title = image && image.getAttribute('alt');
+      if (title && HAS_WORD.test(title)) return title.trim();
+      var linkTitle = element.getAttribute('title');
+      if (linkTitle) return linkTitle.replace(/^View\s+/i, '').trim();
+    }
+    // Material icon ligatures are implementation text, not action labels.
+    if (safeMatchesSelector(element, 'button, [role="button"]') && element.querySelector('.icon')) {
+      var clone = element.cloneNode(true);
+      var icons = clone.querySelectorAll('.icon');
+      for (var i = 0; i < icons.length; i++) {
+        if (icons[i].parentNode) icons[i].parentNode.removeChild(icons[i]);
+      }
+      var text = (clone.textContent || '').trim();
+      if (HAS_WORD.test(text)) return text;
+    }
+    return '';
+  }
+
+  // Symmetry selectors apply only to Crovaya and its Shopify alias.
+  function isCrovayaStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)crovaya\.com$/.test(hostname) ||
+        hostname === 'crovaya.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyCrovayaModule(element) {
+    if (!isCrovayaStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('cart-drawer, .cart-drawer')) return 'cart_drawer';
+    if (cl('.mobile-navigation-drawer')) return 'mobile_menu';
+    if (cl('.section-header, page-header, main-navigation')) return 'header_menu';
+    if (cl('.section-footer')) return 'footer';
+    if (cl('.section-announcement-bar, announcement-bar')) return 'announcement_bar';
+    if (cl('media-gallery, .product-media-wrapper')) return 'pdp_gallery';
+    if (cl('product-block, .product-block')) return 'product_list';
+    if (cl('.filter-group, .filter-toggle')) return 'collection_filters';
+    if (cl('.product-form, buy-buttons, variant-picker, sticky-atc')) return 'pdp_purchase_area';
+    var slideshow = cl('.section-slideshow');
+    if (slideshow) {
+      return slideshow === document.querySelector('main .section-slideshow')
+        ? 'hero_banner' : 'carousel';
+    }
+    if (cl('slide-show, carousel-slider')) return 'carousel';
+    return null;
+  }
+
+  function getCrovayaActionName(element) {
+    if (!isCrovayaStorefront()) return '';
+    if (safeMatchesSelector(element, '.logo__link')) return 'Brand Logo';
+    if (safeMatchesSelector(element, 'input.js-option')) return element.value || '';
+    if (safeMatchesSelector(element, '.filter-group__checkbox, .filter-toggle__input')) {
+      var label = safeClosest(element, 'label');
+      var caption = label && label.querySelector('.filter-group__item__text, .filter-toggle__input-label-text');
+      if (caption && HAS_WORD.test(caption.textContent || '')) return caption.textContent.trim();
+      return element.value || '';
+    }
+    if (safeMatchesSelector(element, 'a.thumbnail, a.show-gallery')) {
+      var item = safeClosest(element, '.slider__item');
+      if (item && item.parentElement) {
+        return 'Product Image ' + (Array.prototype.indexOf.call(item.parentElement.children, item) + 1);
+      }
+    }
+    var card = safeClosest(element, 'product-block, .product-block');
+    if (card && safeMatchesSelector(element, 'a.product-link')) {
+      var title = card.querySelector('.product-block__title');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    return '';
+  }
+
+  function isChicneryStorefront() {
+    try {
+      var hostname = window.location.hostname.toLowerCase();
+      return /(^|\.)chicnery\.com$/.test(hostname) ||
+        hostname === 'idn2mq-a7.myshopify.com';
+    } catch (e) { return false; }
+  }
+
+  function identifyChicneryModule(element) {
+    if (!isChicneryStorefront()) return null;
+    function cl(sel) { return safeClosest(element, sel); }
+    if (cl('#slideout-ajax-cart, #mini-cart, .mini-cart')) return 'cart_drawer';
+    if (cl('#slideout-mobile-navigation, nav.mobile-menu')) return 'mobile_menu';
+    if (cl('.myrv, .myrv-badge, #myrv-reviews, [class*="myrv-"]')) return 'product_reviews';
+    if (cl('.collection__page-filter, .collection__horizontal-toolbar, .collection__filtering, .sort-by__wrapper'))
+      return 'collection_filters';
+    if (cl('.product__section-images, .product__gallery--container, .js-thumb-item'))
+      return 'pdp_gallery';
+    if (cl('.product-index, .js-product-listing')) return 'product_list';
+    if (cl('.product__section-details, .product__form-container, .product__form-buttons, .product__variants-swatches'))
+      return 'pdp_purchase_area';
+    if (cl('.collection__list-item')) return 'category_grid';
+    if (cl('.slideshow-section')) {
+      // Only the primary slideshow section is the homepage hero. Other
+      // slideshows keep their carousel classification.
+      return cl('[id^="shopify-section-template--"][id$="__slideshow"]')
+        ? 'hero_banner' : 'carousel';
+    }
+    if (cl('.collection__page-products')) return 'collection_grid';
+    return null;
+  }
+
+  function getChicneryActionName(element) {
+    if (!isChicneryStorefront()) return '';
+    if (safeClosest(element, '#logo, .theme__logo')) return 'Brand Logo';
+    if (safeMatchesSelector(element, '.swatches__form--input')) return element.value || '';
+    if (safeMatchesSelector(element, 'input.js-hz-filter-input[readonly]')) {
+      return element.getAttribute('data-placeholder') || element.getAttribute('placeholder') || 'Filter';
+    }
+    if (safeMatchesSelector(element, '.js-hz-filter-list input')) {
+      var optionLabel = element.parentElement && element.parentElement.querySelector('label');
+      if (optionLabel && HAS_WORD.test(optionLabel.textContent || '')) return optionLabel.textContent.trim();
+    }
+    if (safeMatchesSelector(element, '.swatches__form--label, .js-hz-filter-label')) {
+      var control = document.getElementById(element.getAttribute('for') || '');
+      if (control && control.value) return control.value;
+    }
+    var thumbnail = safeClosest(element, '.js-thumb-item');
+    if (thumbnail) {
+      var index = parseInt(thumbnail.getAttribute('data-slide-index'), 10);
+      if (!isNaN(index)) return 'Product Image ' + (index + 1);
+    }
+    if (safeMatchesSelector(element, '.quantity-control-up')) return 'Qty Plus';
+    if (safeMatchesSelector(element, '.quantity-control-down')) return 'Qty Minus';
+    var card = safeClosest(element, '.product-index, .js-product-listing');
+    if (card && safeMatchesSelector(element, 'a') && !HAS_WORD.test(element.textContent || '')) {
+      var title = card.querySelector('.product--listing-title');
+      if (title && HAS_WORD.test(title.textContent || '')) return title.textContent.trim();
+    }
+    return '';
+  }
+
   if (typeof window.dlIdentifyModule !== 'function') {
     window.dlIdentifyModule = function(element) {
       if (!element) return 'unknown';
       function cl(sel) { return safeClosest(element, sel); }
       try {
+        var storefrontModule = identifyZemureaModule(element) || identifyYohersModule(element) || identifyVionvaModule(element) || identifyOyrosyModule(element) || identifyOlivriaModule(element) || identifyOkloraModule(element) || identifyMooyiusModule(element) || identifyLiserieModule(element) || identifyGloeriaModule(element) || identifyFutarioModule(element) || identifyElevenOraModule(element) || identifyCrovayaModule(element) || identifyChicneryModule(element);
+        if (storefrontModule) return storefrontModule;
         if (cl('header.header, .header-section, .main-header-top, nav.nav-main-wrapper, #mobile-nav-menu, .drawer-mobile-menu, .site-nav-item, .header-icons-item, .navbar')) {
           return cl('.nav-grandmenu, .mega-menu, [class*="mega"]') ? 'mega_menu' : 'header_menu';
         }
@@ -289,7 +1233,7 @@
         tempA.href = href;
         isExternal = tempA.hostname !== currentDomain;
         for (var i = 0; i < config.internalDomains.length; i++) {
-          if (tempA.hostname.indexOf(config.internalDomains[i]) !== -1) {
+          if (hostnameMatchesDomain(tempA.hostname, config.internalDomains[i])) {
             isExternal = false;
             break;
           }
@@ -358,6 +1302,9 @@
     try {
       var manual = link.getAttribute('data-ga-action-name');
       if (manual && manual.trim()) return manual.trim();
+
+      var storefrontText = getZemureaActionName(link) || getYohersActionName(link) || getVionvaActionName(link) || getOyrosyActionName(link) || getOlivriaActionName(link) || getOkloraActionName(link) || getMooyiusActionName(link) || getLiserieActionName(link) || getGloeriaActionName(link) || getFutarioActionName(link) || getElevenOraActionName(link) || getCrovayaActionName(link) || getChicneryActionName(link);
+      if (storefrontText) return storefrontText;
 
       var head = link.querySelector('.product-name, .product-title-wrapper, h1, h2, h3, h4, h5, h6');
       if (head) {
