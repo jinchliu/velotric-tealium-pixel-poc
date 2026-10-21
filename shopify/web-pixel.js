@@ -239,6 +239,7 @@ async function sendStoreCookies(checkoutToken, shopifyCustomerId) {
 
     const payload = {
         "event": "store_cookies",
+        "measurement_id": config.conversionTracking.measurementId,
         // Join key: Shopify's checkout token, which the orders/paid webhook
         // exposes under this same name.
         //

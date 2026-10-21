@@ -155,6 +155,7 @@ Web Pixel 跑在沙箱 iframe 里,事件通过 `window.parent.postMessage` 镜�
 | 字段 | 来源 |
 | --- | --- |
 | `event` | 固定 `store_cookies` |
+| `measurement_id` | GA4 Measurement ID from `config.conversionTracking.measurementId` |
 | `cart_token` | `checkout.token`。字段名沿用线上已部署 sGTM 的 `cart_token`(不可改),但**值是 checkout token**,对应订单 webhook 的 `checkout_token`,而非 webhook 的 `cart_token` |
 | `_ga` | `_ga` cookie 原值 |
 | `_ga_<g_id>` | GA4 session cookie 原值(键名随 `measurement_id` 变化) |
