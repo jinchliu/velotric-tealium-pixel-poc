@@ -556,19 +556,44 @@ if (typeof analytics !== 'undefined') {
             const eventContextData = event.context?.document;
             const cart = event.data?.cart;
             if (!cart) return;
-            const processedData = processCheckoutProducts(cart.lines);
+            const cartLines = Array.isArray(cart.lines) ? cart.lines : [];
+            const googleAnalyticsProducts = cartLines
+                .filter((cartLine) => cartLine?.merchandise)
+                .map((cartLine, index) => {
+                    const merchandise = cartLine.merchandise;
+                    const quantity = parseInt(cartLine.quantity || 1, 10);
+                    const originalPrice = parseFloat(merchandise.price?.amount || 0);
+                    const lineTotal = parseFloat(
+                        cartLine.cost?.totalAmount?.amount ?? (originalPrice * quantity)
+                    );
+                    const pricePerUnit = lineTotal / quantity;
+
+                    return {
+                        item_id: buildEcommProdId(merchandise.product?.id, merchandise.id),
+                        item_group_id: merchandise.product?.id,
+                        item_name: merchandise.product?.title,
+                        affiliation: config.store.affiliationName,
+                        discount: parseFloat((originalPrice - pricePerUnit).toFixed(2)),
+                        index: index + 1,
+                        item_brand: merchandise.product?.vendor,
+                        item_category: merchandise.product?.type,
+                        item_variant: merchandise.sku || merchandise.title,
+                        price: parseFloat(pricePerUnit.toFixed(2)),
+                        quantity: quantity
+                    };
+                });
             const orderLevelCoupons = getOrderLevelCoupons(cart.discountApplications);
             pushEventToDataLayer({
                 event: 'cus_view_cart',
                 page_location: eventContextData?.location?.href,
                 page_referrer: eventContextData?.referrer,
                 page_title: eventContextData?.title,
-                ecomm_prodid: processedData.ecomm_prodid_list.join(','),
+                ecomm_prodid: googleAnalyticsProducts.map((item) => item.item_id).filter(Boolean).join(','),
                 ecommerce: {
                     currency: cart.cost?.totalAmount?.currencyCode,
                     value: parseFloat(cart.cost?.totalAmount?.amount || 0),
                     coupon: orderLevelCoupons,
-                    items: processedData.items
+                    items: googleAnalyticsProducts
                 }
             });
         });
