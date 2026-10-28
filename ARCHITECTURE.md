@@ -1,5 +1,28 @@
 # ARCHITECTURE
 
+> The current Velotric test files are Tealium-only and retain the original per-event Pixel layout. See [Velotric integration notes](docs/clients/velotric.md). The original production GTM Pixel is a separate installation.
+
+## Tealium POC flow
+
+```text
+Shopify events -> original per-event calculations -> Tealium UDO mapper
+  -> Pixel-owned consent checks, preparation queue, readiness and deduplication
+     Storefront: minimal parent loader/receiver -> utag.view / utag.link
+     Checkout:  SDK inside the Pixel          -> utag.view / utag.link
+Shopify privacy API -> Pixel state -> permission snapshot in each bridge message
+```
+
+Only approved origins activate this POC. There are no dataLayer writes,
+GTM/Stape loaders, or store-cookie POSTs. The theme contains no copy of the Pixel
+runtime, queues, or timers. Consentmo live integration is deferred. Both files
+use bridge protocol version 3 and must be installed together.
+
+## Legacy production architecture reference
+
+The remaining description documents the original GTM production integration,
+including its legacy file names. It does not describe the current Tealium-only
+POC implementation or authorize changes to the production store.
+
 整套方案分三端 —— web 端、server 端、补发 —— 难点几乎都在接缝处。本仓库是
 web 端的源码。
 
@@ -12,7 +35,8 @@ web 端的源码。
 | `gtm/*.html` | web 容器里两个交互追踪 custom HTML tag 的源码，GTM 里是逐字节副本 |
 | `docs/` | 字段参考、排查手册、各客户记录 |
 
-无构建步骤、无依赖、无测试。
+The base Shopify files are standalone. The Velotric Dev delivery has a local
+Node.js build and tests; see the client integration notes above.
 
 ## 系统全景
 

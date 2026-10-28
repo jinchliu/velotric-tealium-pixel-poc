@@ -1,23 +1,70 @@
-<!-- Google Tag Manager -->
+<!-- Tealium test theme: SDK loader and Pixel message receiver only. -->
 <script>
-  (function (w, d, s, l, i) {
-    w[l] = w[l] || [];
-    w[l].push({ 'gtm.start': new Date().getTime(), event: 'gtm.js' });
-    var f = d.getElementsByTagName(s)[0], j = d.createElement(s);
-    j.async = true;
-    j.src = "https://load.securedata.zemurea.com/28eqbgxbxdc.js?" + i;
-    f.parentNode.insertBefore(j, f);
-  })(window, document, 'script', 'dataLayer', '3fev=CgBFJSwqTzonXTooLlJWVxVZSkxJQQYfXh4dDw0VBxBNBxcP');
-</script>
-<!-- End Google Tag Manager -->
+(() => {
+/* TEALIUM_CONFIG_START */
+const TEALIUM_CONFIG = {
+    enabled: false,
+    account: 'velotric-trial',
+    profile: 'main',
+    environment: 'dev',
+    storefrontOrigins: ['https://tealium-5hvassg6.myshopify.com'],
+    collectConsentCategory: 'analytics',
+    identityConsentCategory: 'marketing',
+    pixelIframeSelector: 'iframe[id^="web-pixel-sandbox-CUSTOM-"]',
+};
+/* TEALIUM_CONFIG_END */
+if (!TEALIUM_CONFIG.enabled || !TEALIUM_CONFIG.storefrontOrigins.includes(window.location.origin)
+    || window.__velotricTealiumBridgeInstalled) return;
+window.__velotricTealiumBridgeInstalled = true;
+let loading = false;
+let failed = false;
+const states = new WeakMap();
+const allowed = (consent, category) => consent?.['cmp_consent_' + category] === 'granted';
+const ready = () => typeof window.utag?.view === 'function' && typeof window.utag?.link === 'function';
 
-<script>
-  window.dataLayer = window.dataLayer || [];
-  window.dataLayer.push({ event: "cus_page_view" });
-  window.addEventListener('message', function (event) {
-    if (event.data && event.data.event) {
-      window.dataLayer.push(event.data);
-      window.dataLayer.push({ ecommerce: null });
+// Official Universal Tag snippet, called only after the existing permission check.
+function loadTealium() {
+    if (ready() || window.utag || loading || failed) return;
+    loading = true;
+    window.utag_cfg_ovrd = { ...window.utag_cfg_ovrd, noview: true };
+    (function(a,b,c,d) {
+        a='https://tags.tiqcdn.com/utag/' + TEALIUM_CONFIG.account + '/' + TEALIUM_CONFIG.profile + '/' + TEALIUM_CONFIG.environment + '/utag.js';
+        b=document;c='script';d=b.createElement(c);d.src=a;
+        d.type='text/java'+c;d.async=true;
+        d.onerror=() => { failed=true; console.warn('[tealium] SDK unavailable.'); };
+        a=b.getElementsByTagName(c)[0];a.parentNode.insertBefore(d,a);
+    })();
+}
+
+// Pixel bridge and authorization checks are separate from the SDK loader.
+window.addEventListener('message', message => {
+    const data = message.data;
+    const trusted = Array.from(document.querySelectorAll(TEALIUM_CONFIG.pixelIframeSelector))
+        .some(frame => frame.contentWindow === message.source);
+    if (!trusted || data?.channel !== 'velotric:tealium' || data.version !== 3
+        || !['hello', 'consent', 'event'].includes(data.kind) || !Number.isInteger(data.revision)
+        || data.revision < 0 || data.revision < (states.get(message.source) ?? -1)) return;
+    states.set(message.source, data.revision);
+    if (data.kind === 'consent' || !allowed(data.consent, TEALIUM_CONFIG.collectConsentCategory)) return;
+    if (data.kind === 'hello') {
+        loadTealium();
+        if (ready()) message.source.postMessage({ channel: 'velotric:tealium', version: 3, kind: 'ready' }, '*');
+        return;
     }
-  });
+    if (!ready() || !data.payload || typeof data.payload !== 'object'
+        || !allowed(data.captureConsent, TEALIUM_CONFIG.collectConsentCategory)) return;
+    const payload = { ...data.payload };
+    try { if (new URL(payload.page_location).origin !== window.location.origin) return; }
+    catch (error) { return; }
+    if (!allowed(data.consent, TEALIUM_CONFIG.identityConsentCategory)
+        || !allowed(data.captureConsent, TEALIUM_CONFIG.identityConsentCategory)) {
+        Object.keys(payload).filter(key => key === 'user_id' || key.startsWith('customer_')).forEach(key => { delete payload[key]; });
+    }
+    Object.assign(payload, data.consent);
+    try {
+        if (payload.tealium_event === 'page_view') window.utag.view(payload);
+        else window.utag.link(payload);
+    } catch (error) { console.warn('[tealium] Tracking call failed.'); }
+});
+})();
 </script>

@@ -3,6 +3,7 @@
 
 dist/
 *.min.js
+node_modules/
 
 # Ad-hoc Firestore attribution analysis; pulls production data into .cache/
 analysis/

@@ -3,11 +3,8 @@
 ==============================================================================*/
 const config = {
     conversionTracking: {
-        measurementId: 'G-MPQK5JYFT0', // Zemurea GA4 web stream
+        measurementId: 'G-4FLMVWWG56', // Existing test-stream cookie lookup only.
         trackPageViews: true,
-        trackClicks: true,
-        trackSearch: true,
-        trackFormSubmit: true,
         trackViewItemList: true,
         trackViewItem: true,
         trackAddToCart: true,
@@ -19,78 +16,162 @@ const config = {
         trackPurchase: true,
     },
     store: {
-        // Fallback for the country segment of the Google Merchant Center
-        // product ID (shopify_<country>_<productId>_<variantId>), used when
-        // init reports no shop country — see resolveGmcCountry(). Copy it from
-        // a real ID in the live GMC feed.
         gmcCountryFallback: 'US',
         affiliationName: typeof init !== 'undefined' && init.data && init.data.shop ? init.data.shop.name : 'Unknown Store',
     },
 };
 
+/* TEALIUM_CONFIG_START */
+const TEALIUM_CONFIG = {
+    enabled: false,
+    account: 'velotric-trial',
+    profile: 'main',
+    environment: 'dev',
+    storefrontOrigins: ['https://tealium-5hvassg6.myshopify.com'],
+    collectConsentCategory: 'analytics',
+    identityConsentCategory: 'marketing',
+    includePurchaseAddress: true,
+    queueLimit: 100,
+    readyTimeoutMs: 10000,
+    pixelIframeSelector: 'iframe[id^="web-pixel-sandbox-CUSTOM-"]',
+};
+/* TEALIUM_CONFIG_END */
+
 /*==============================================================================
-  GTM loader via Stape
+  Tealium sender: one queue for checkout or the storefront bridge
 ==============================================================================*/
+function createVelotricTealiumRuntime(settings, transport = null) {
+    const consentKeys = ['analytics', 'marketing', 'personalization', 'sale_of_data'];
+    const events = new Set(Object.values(eventMap));
+    let consent = {};
+    let queue = [];
+    let script = null;
+    let timer = null;
+    let deadline = 0;
+    let failed = false;
+    const seen = new Set();
+    const orders = new Set();
+    const pending = new Set();
+    const pendingOrders = new Set();
+    const permitted = state => state['cmp_consent_' + settings.collectConsentCategory] === 'granted';
+    const identityPermitted = state => state['cmp_consent_' + settings.identityConsentCategory] === 'granted';
+    const configured = () => settings.enabled && /^[a-zA-Z0-9_-]+$/.test(settings.account)
+        && /^[a-zA-Z0-9_-]+$/.test(settings.profile) && ['dev', 'qa', 'prod'].includes(settings.environment)
+        && consentKeys.includes(settings.collectConsentCategory) && consentKeys.includes(settings.identityConsentCategory);
+    const remember = (set, value) => {
+        set.add(value);
+        if (set.size > 1000) set.delete(set.values().next().value);
+    };
+    function discard(entry) {
+        pending.delete(entry.payload.event_id);
+        if (entry.payload.order_id) pendingOrders.delete(entry.payload.order_id);
+    }
+    function clearQueue() {
+        queue.forEach(discard);
+        queue = [];
+        if (timer !== null) window.clearTimeout(timer);
+        timer = null;
+    }
+    function setConsent(next) {
+        consent = Object.fromEntries(consentKeys.map(category => {
+            const key = 'cmp_consent_' + category;
+            return [key, ['granted', 'denied', 'unknown'].includes(next?.[key]) ? next[key] : 'unknown'];
+        }));
+        if (!permitted(consent)) clearQueue();
+        if (!identityPermitted(consent)) queue.forEach(entry => stripIdentity(entry.payload));
+    }
+    function fail() {
+        failed = true;
+        clearQueue();
+        if (script) script.remove();
+        script = null;
+        console.warn('[tealium] SDK unavailable; queued events discarded.');
+    }
+    function flush() {
+        timer = null;
+        if (!permitted(consent)) return clearQueue();
+        if (transport && !transport.ready()) transport.requestReady();
+        const ready = transport ? transport.ready()
+            : typeof window.utag?.view === 'function' && typeof window.utag?.link === 'function';
+        if (!ready) {
+            if (Date.now() >= deadline) return fail();
+            timer = window.setTimeout(flush, 50);
+            return;
+        }
+        while (queue.length) {
+            const entry = queue.shift();
+            const payload = entry.payload;
+            discard(entry);
+            if (!permitted(consent) || !permitted(entry.captureConsent)) continue;
+            if (!identityPermitted(consent) || !identityPermitted(entry.captureConsent)) stripIdentity(payload);
+            Object.assign(payload, consent);
+            // Mark before invoking vendor code, including a vendor exception.
+            remember(seen, payload.event_id);
+            if (payload.order_id) remember(orders, payload.order_id);
+            try {
+                if (transport) transport.send(payload, entry.captureConsent);
+                else if (payload.tealium_event === 'page_view') window.utag.view(payload);
+                else window.utag.link(payload);
+            } catch (error) {
+                console.warn('[tealium] Tracking call failed.');
+            }
+        }
+    }
+    function enqueue(payload, captureConsent) {
+        if (!configured() || failed || !velotricTealiumPageAllowed(payload?.page_location, settings)
+            || !events.has(payload?.tealium_event)
+            || !payload.event_id || !permitted(captureConsent) || !permitted(consent)) return false;
+        if (payload.tealium_event === 'purchase' && !payload.order_id) return false;
+        if (seen.has(payload.event_id) || pending.has(payload.event_id)
+            || (payload.order_id && (orders.has(payload.order_id) || pendingOrders.has(payload.order_id)))) return false;
+        if (queue.length >= settings.queueLimit) discard(queue.shift());
+        // Clone parallel product arrays before queueing asynchronous delivery.
+        const snapshot = Object.fromEntries(Object.entries(payload).map(([key, value]) => [key, Array.isArray(value) ? [...value] : value]));
+        if (!identityPermitted(captureConsent) || !identityPermitted(consent)) stripIdentity(snapshot);
+        queue.push({ payload: snapshot, captureConsent: { ...captureConsent } });
+        pending.add(payload.event_id);
+        if (payload.order_id) pendingOrders.add(payload.order_id);
+        if (deadline === 0) deadline = Date.now() + settings.readyTimeoutMs;
+        if (!transport && !script && !window.utag) {
+            window.utag_cfg_ovrd = { ...window.utag_cfg_ovrd, noview: true };
+            script = document.createElement('script');
+            script.async = true;
+            script.src = 'https://tags.tiqcdn.com/utag/' + settings.account + '/' + settings.profile + '/' + settings.environment + '/utag.js';
+            script.onerror = fail;
+            (document.head || document.documentElement).appendChild(script);
+        }
+        if (timer === null) flush();
+        return true;
+    }
+    return { enqueue, setConsent, clearIdentity: () => queue.forEach(entry => stripIdentity(entry.payload)) };
+}
 
-// First-party Custom Loader domain. Keep theme-liquid.html in sync.
-const STAPE_CONTAINER_LOADING_PATH = 'https://load.securedata.zemurea.com';
-// Send store_cookies to the tagging server, separately from the script CDN.
-const STAPE_TAGGING_SERVER_URL = 'https://securedata.zemurea.com';
-// Both come from the GTM snippet that the Stape Conversion Tracking app
-// generates in Shopify — neither is visible in the Stape admin, which only
-// exposes the container identifier. The script name is an app-generated prefix
-// plus that identifier, and the two are only valid as a pair: the query string
-// encodes the web container ID, and the path alone 404s.
-const STAPE_LOADER_SCRIPT_NAME = '28eqbgxbxdc.js';
-const STAPE_LOADER_QUERY_STRING = '3fev=CgBFJSwqTzonXTooLlJWVxVZSkxJQQYfXh4dDw0VBxBNBxcP';
-const STAPE_LOADER_SCRIPT_URL = `${STAPE_CONTAINER_LOADING_PATH}/${STAPE_LOADER_SCRIPT_NAME}`;
 
-// Snippet generated by the Stape Conversion Tracking app in Shopify.
-// TODO(#3): no idempotence guard. This runs on both checkout_started and
-// checkout_completed, which may be the same page load on Shopify's SPA
-// checkout; double injection is unverified.
-function loadGTM() {
-    (function (w, d, s, l, i, src) {
-        w[l] = w[l] || [];
-        w[l].push({ 'gtm.start': new Date().getTime(), event: 'gtm.js' });
-        var f = d.getElementsByTagName(s)[0], j = d.createElement(s);
-        j.async = true;
-        j.src = src + "?" + i;
-        f.parentNode.insertBefore(j, f);
-    })(window, document, 'script', 'dataLayer', STAPE_LOADER_QUERY_STRING, STAPE_LOADER_SCRIPT_URL);
+function velotricTealiumPageAllowed(pageLocation, settings) {
+    try {
+        const url = new URL(pageLocation);
+        return url.protocol === 'https:' && settings.storefrontOrigins.includes(url.origin);
+    } catch (error) { return false; }
+}
+function velotricTealiumUsesSandbox(pageLocation, settings) {
+    if (!velotricTealiumPageAllowed(pageLocation, settings)) return false;
+    const path = new URL(pageLocation).pathname;
+    return /\/(?:checkouts?|thank_you|thank-you)(?:\/|$)/.test(path)
+        || /^\/(?:\d+\/)?orders(?:\/|$)/.test(path);
+}
+function velotricTealiumShopifyConsent(state) {
+    const value = entry => entry === true ? 'granted' : entry === false ? 'denied' : 'unknown';
+    return {
+        cmp_consent_analytics: value(state?.analyticsProcessingAllowed),
+        cmp_consent_marketing: value(state?.marketingAllowed),
+        cmp_consent_personalization: value(state?.preferencesProcessingAllowed),
+        cmp_consent_sale_of_data: value(state?.saleOfDataAllowed),
+    };
 }
 
 /*==============================================================================
   Helpers
 ==============================================================================*/
-function pushEventToDataLayer(eventData) {
-    window.dataLayer = window.dataLayer || [];
-    window.dataLayer.push(eventData);
-    if (window.parent && window.parent !== window) {
-        try {
-            window.parent.postMessage(eventData, '*');
-        } catch (e) {
-            console.warn('[pixel] could not post message to parent window.', e);
-        }
-    }
-    // GA4 reads ecommerce off the whole dataLayer, not off one push, so an
-    // items[] left behind here would leak into the next event that carries no
-    // items of its own. Clearing it after every ecommerce push is what keeps
-    // consecutive events from contaminating each other.
-    if (eventData.ecommerce) {
-        window.dataLayer.push({
-            ecommerce: null
-        });
-    }
-}
-
-// Resolve the country segment of the Google Merchant Center product ID from
-// the shop's own country, falling back to the configured value.
-//
-// shop.countryCode follows the store address in Settings, which Shopify
-// requires to match the business entity's country, so a brand selling abroad
-// can resolve to where it is registered rather than where it sells. The
-// warning is what surfaces that.
 function resolveGmcCountry() {
     const shop = typeof init !== 'undefined' ? init.data?.shop : null;
     const fallback = config.store.gmcCountryFallback;
@@ -114,200 +195,6 @@ function buildEcommProdId(productId, variantId) {
     return `shopify_${GMC_COUNTRY}_${productId}_${variantId}`;
 }
 
-const initContextData = typeof init !== 'undefined' ? init.context?.document : null;
-if (initContextData) {
-    window.dataLayer = window.dataLayer || [];
-    dataLayer.push({
-        page_location: initContextData.location?.href,
-        page_referrer: initContextData.referrer,
-        page_title: initContextData.title,
-    });
-}
-
-
-/*==============================================================================
-  Store cookies bridge (sGTM / Firestore)
-==============================================================================*/
-// Read a first-party cookie through the Shopify Web Pixel sandbox API.
-function getCookie(name) {
-    return browser.cookie.get(name).catch(() => null);
-}
-
-function generateUUID() {
-    var d = new Date().getTime();
-    var d2 = (typeof performance !== 'undefined' && performance.now && (performance.now() * 1000)) || 0;
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-        var r = Math.random() * 16;
-        if (d > 0) {
-            r = (d + r) % 16 | 0;
-            d = Math.floor(d / 16);
-        } else {
-            r = (d2 + r) % 16 | 0;
-            d2 = Math.floor(d2 / 16);
-        }
-        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-    });
-}
-
-// _ga cookie format: GA1.<domainDepth>.<random>.<firstVisitTimestamp>
-// The client ID is the last two segments, e.g. "1234567890.1700000000".
-function parseGa4ClientId(gaCookie) {
-    if (!gaCookie || !gaCookie.startsWith('GA1.')) return null;
-    const segments = gaCookie.split('.');
-    if (segments.length < 4) return null;
-    return `${segments[segments.length - 2]}.${segments[segments.length - 1]}`;
-}
-
-// _ga_<gaContainerId> cookie holds the session ID in its third segment:
-//   GS1 format: GS1.1.<sessionId>.<sessionNumber>...
-//   GS2 format: GS2.1.s<sessionId>$o<n>$g<n>...
-// gaContainerId is the measurement ID minus its "G-" prefix, e.g.
-// "G-XXXXXXXXXX" -> "_ga_XXXXXXXXXX". Google's cookie docs call this
-// "container-id"; the "ga" prefix here keeps it distinct from the GTM
-// and Stape container IDs also used in this file.
-function parseGa4SessionId(sessionCookie) {
-    if (!sessionCookie) return null;
-    const segments = sessionCookie.split('.');
-    if (segments.length < 3) return null;
-    const sessionSegment = segments[2];
-    let sessionId = sessionSegment;
-    if (sessionSegment.startsWith('s') && sessionSegment.includes('$')) {
-        sessionId = sessionSegment.substring(1).split('$')[0];
-    }
-    return /^\d+$/.test(sessionId) ? sessionId : null;
-}
-
-// Derived from measurementId, never configured separately — the storefront's
-// gtag.js decides this name, so the two cannot disagree by design.
-const GA_SESSION_COOKIE_NAME = `_ga_${config.conversionTracking.measurementId.replace(/^G-/, '')}`;
-
-// Checkout tokens sGTM has already acknowledged with a 2xx. Every checkout step
-// event retries the send, so this is what keeps the happy path down to a single
-// Firestore write: once a send succeeds the token lands here and later events
-// short-circuit. A failed send leaves the token out, so the next step retries it.
-const sentCheckoutTokens = new Set();
-
-// Tokens whose request is issued but not yet answered. Checkout steps can fire
-// in the same tick, which would otherwise slip past sentCheckoutTokens while the
-// first response is still in flight and write the same token to Firestore twice.
-const inFlightCheckoutTokens = new Set();
-
-// POST the storefront cookies to sGTM, which persists them in Firestore keyed
-// by checkout token so that webhook-replayed orders can be attributed later.
-//
-// Runs immediately, with no timer and no gtag round-trip. Every cookie read
-// here is written by the storefront GTM container long before checkout starts,
-// so waiting cannot surface a value that is not already there — it only widens
-// the window in which a page unload kills the request. `keepalive` protects a
-// request in flight; it does nothing for one that was never issued.
-async function sendStoreCookies(checkoutToken, shopifyCustomerId) {
-    // Without the join key the payload can never be matched back to an order,
-    // and sGTM keys the Firestore collection on it, so there is nowhere to put it.
-    if (!checkoutToken) {
-        console.warn('[pixel] store_cookies: no checkout token, skipping.');
-        return;
-    }
-    if (sentCheckoutTokens.has(checkoutToken) || inFlightCheckoutTokens.has(checkoutToken)) return;
-    // Claim the token synchronously — the first await below yields control and
-    // would let a same-tick event through.
-    inFlightCheckoutTokens.add(checkoutToken);
-
-    const [
-        gaCookie,
-        gaSessionCookie,
-        fbp,
-        fbc,
-        sepCampaign,
-        sepContent,
-        sepMedium,
-        sepSource,
-        sepSourcePlatform,
-        sepTerm
-    ] = await Promise.all([
-        getCookie('_ga'),
-        getCookie(GA_SESSION_COOKIE_NAME),
-        getCookie('_fbp'),
-        getCookie('_fbc'),
-        getCookie('gtm_dd_sep_campaign'),
-        getCookie('gtm_dd_sep_content'),
-        getCookie('gtm_dd_sep_medium'),
-        getCookie('gtm_dd_sep_source'),
-        getCookie('gtm_dd_sep_source_platform'),
-        getCookie('gtm_dd_sep_term')
-    ]);
-
-    // Both fallbacks below produce well-formed values that join nothing
-    // downstream, so these warnings are the only signal that they were reached.
-    const gaClientId = parseGa4ClientId(gaCookie);
-    const gaSessionId = parseGa4SessionId(gaSessionCookie);
-    if (!gaClientId) {
-        console.warn('[pixel] no _ga cookie — ga_client_id falls back to a random UUID that matches no GA4 user.');
-    }
-    if (!gaSessionId) {
-        console.warn(`[pixel] no ${GA_SESSION_COOKIE_NAME} cookie — ga_session_id falls back to a timestamp. Check that measurementId matches the property gtag.js writes on this storefront.`);
-    }
-
-    const payload = {
-        "event": "store_cookies",
-        "measurement_id": config.conversionTracking.measurementId,
-        // Join key: Shopify's checkout token, which the orders/paid webhook
-        // exposes under this same name.
-        //
-        // Four places carry this name and must move together. `Write Checkout
-        // Token` sends the whole event data payload to Firestore
-        // (addEventData = true), so the name also becomes a stored document
-        // field, which the lookups then filter on:
-        //   1. this field
-        //   2. sGTM `ED - checkout_token`      keyPath
-        //   3. sGTM `ga_client_id`             queryKey
-        //   4. sGTM `ga_session_id`            queryKey
-        //
-        // eco-worthy calls this field `cart_token` — a misnomer frozen by its
-        // already-deployed container. modesees corrected it while nothing was
-        // deployed yet, which is why this branch must not be merged into main.
-        //
-        // Not Shopify's own `cart_token`: that is a different value in a
-        // different format and joins at 0%.
-        "checkout_token": checkoutToken,
-        "fbp": fbp,
-        "fbc": fbc,
-        "_ga": gaCookie,
-        [GA_SESSION_COOKIE_NAME]: gaSessionCookie,
-        "ga_client_id": gaClientId || generateUUID(),
-        "ga_session_id": gaSessionId || String(Math.floor(Date.now() / 1000)),
-        "shopify_customer_id": shopifyCustomerId,
-        "gtm_dd_sep_campaign": sepCampaign,
-        "gtm_dd_sep_content": sepContent,
-        "gtm_dd_sep_medium": sepMedium,
-        "gtm_dd_sep_source": sepSource,
-        "gtm_dd_sep_source_platform": sepSourcePlatform,
-        "gtm_dd_sep_term": sepTerm
-    };
-
-    return fetch(`${STAPE_TAGGING_SERVER_URL}/data`, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload),
-        keepalive: true
-    }).then((response) => {
-        inFlightCheckoutTokens.delete(checkoutToken);
-        if (response.ok) {
-            sentCheckoutTokens.add(checkoutToken);
-        } else {
-            console.error('[pixel] store_cookies rejected by sGTM:', response.status, response.statusText);
-        }
-    }).catch((error) => {
-        inFlightCheckoutTokens.delete(checkoutToken);
-        console.error('[pixel] store_cookies failed to send:', error);
-    });
-}
-
-
-/*==============================================================================
-  Line item mapping
-==============================================================================*/
 const processCheckoutProducts = (lineItemsInput) => {
     let finalProductArray = [];
     let ecomm_prodid_list = [];
@@ -369,95 +256,239 @@ const processCheckoutProducts = (lineItemsInput) => {
     };
 };
 
+const initContextData = typeof init !== 'undefined' ? init.context?.document : null;
+const pageEnabled = TEALIUM_CONFIG.enabled && velotricTealiumPageAllowed(initContextData?.location?.href, TEALIUM_CONFIG);
+const checkoutContext = velotricTealiumUsesSandbox(initContextData?.location?.href, TEALIUM_CONFIG);
+const GA_SESSION_COOKIE_NAME = '_ga_' + config.conversionTracking.measurementId.replace(/^G-/, '');
+const categoryGranted = (state, category) => state['cmp_consent_' + category] === 'granted';
+const optionalText = value => typeof value === 'string' && value.trim() ? value.trim() : undefined;
+const identifier = value => typeof value === 'number' && Number.isFinite(value) ? String(value) : optionalText(value);
+const numeric = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) ? Number(value) : undefined;
+const compact = object => Object.fromEntries(Object.entries(object).filter(([, value]) => value !== undefined));
+const commonTextKeys = ['previous_full_url', 'previous_url_path', 'previous_page_type', 'content_group', 'page_source', 'page_type'];
+const eventMap = {
+    cus_page_view: 'page_view', cus_view_item_list: 'view_item_list', cus_view_item: 'view_item',
+    cus_add_to_cart: 'add_to_cart', cus_remove_from_cart: 'remove_from_cart', cus_view_cart: 'view_cart',
+    cus_begin_checkout: 'begin_checkout', cus_add_shipping_info: 'add_shipping_info',
+    cus_add_payment_info: 'add_payment_info', cus_purchase: 'purchase',
+    'velotric:login': 'login', 'velotric:sign_up': 'sign_up',
+};
+let privacyState = typeof init !== 'undefined' ? init.customerPrivacy : null;
+let consentRevision = 0;
+let collectionEpoch = 0;
+let identityEpoch = 0;
+let knownIdentity = {};
+let bridgeReady = false;
+let pendingTealiumBuilds = 0;
+let tealiumBuildQueue = Promise.resolve();
+const consentSnapshot = () => velotricTealiumShopifyConsent(privacyState);
+const stripIdentity = payload => Object.keys(payload).filter(key => key === 'user_id' || key.startsWith('customer_'))
+    .forEach(key => { delete payload[key]; });
+function postTealiumBridge(message) {
+    if (!pageEnabled || checkoutContext || window.parent === window) return;
+    window.parent.postMessage({ ...message, channel: 'velotric:tealium', version: 3,
+        consent: consentSnapshot(), revision: consentRevision }, new URL(initContextData.location.href).origin);
+}
+const tealiumRuntime = createVelotricTealiumRuntime(TEALIUM_CONFIG, checkoutContext ? null : {
+    ready: () => bridgeReady,
+    requestReady: () => postTealiumBridge({ kind: 'hello' }),
+    send: (payload, captureConsent) => postTealiumBridge({ kind: 'event', payload, captureConsent }),
+});
+if (pageEnabled) {
+    tealiumRuntime.setConsent(consentSnapshot());
+    window.addEventListener('message', message => {
+        if (checkoutContext || message.source !== window.parent
+            || message.origin !== new URL(initContextData.location.href).origin
+            || message.data?.channel !== 'velotric:tealium' || message.data.version !== 3
+            || message.data.kind !== 'ready') return;
+        bridgeReady = true;
+    });
+    if (typeof api !== 'undefined' && api.customerPrivacy?.subscribe) {
+        api.customerPrivacy.subscribe('visitorConsentCollected', event => {
+            privacyState = event.customerPrivacy;
+            consentRevision += 1;
+            const state = consentSnapshot();
+            if (!categoryGranted(state, TEALIUM_CONFIG.collectConsentCategory)) collectionEpoch += 1;
+            if (!categoryGranted(state, TEALIUM_CONFIG.identityConsentCategory)) {
+                identityEpoch += 1;
+                knownIdentity = {};
+            }
+            tealiumRuntime.setConsent(state);
+            postTealiumBridge({ kind: 'consent' });
+        });
+    }
+}
+function getCookie(name) {
+    return typeof browser !== 'undefined' && browser.cookie?.get ? browser.cookie.get(name) : Promise.resolve(null);
+}
+function parseGa4ClientId(cookie) {
+    const parts = typeof cookie === 'string' ? cookie.split('.') : [];
+    return parts.length >= 4 && /^\d+$/.test(parts[2]) && /^\d+$/.test(parts[3]) ? parts[2] + '.' + parts[3] : undefined;
+}
+function parseGa4SessionId(cookie) {
+    const segment = typeof cookie === 'string' ? cookie.split('.')[2] : null;
+    const id = segment?.startsWith('s') && segment.includes('$') ? segment.slice(1).split('$')[0] : segment;
+    return /^\d+$/.test(id || '') ? id : undefined;
+}
+async function trackingCookies() {
+    // Read existing attribution cookies; this integration never writes them.
+    const keys = ['source', 'medium', 'campaign', 'term', 'content', 'source_platform'];
+    const values = await Promise.all([...keys.map(key => getCookie('gtm_dd_sep_' + key)), getCookie('_ga'), getCookie(GA_SESSION_COOKIE_NAME)]);
+    return compact({ ...Object.fromEntries(keys.map((key, index) => ['cus_utm_' + key, optionalText(values[index])])),
+        client_id: parseGa4ClientId(values[6]), session_id: parseGa4SessionId(values[7]) });
+}
+async function emailHash(data) {
+    const existing = optionalText(data.customer_email_hash);
+    if (existing && /^[a-fA-F0-9]{64}$/.test(existing)) return existing.toLowerCase();
+    const email = optionalText(data.customer_email || data.user_email)?.toLowerCase();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !window.crypto?.subtle) return undefined;
+    const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(email));
+    return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+function productUdo(items) {
+    const products = (Array.isArray(items) ? items : []).filter(item => item
+        && identifier(item.item_id) && numeric(item.price) !== undefined && numeric(item.price) >= 0
+        && numeric(item.quantity) !== undefined && numeric(item.quantity) > 0);
+    // Filter once, then derive every parallel array from the same ordered list.
+    return {
+        product_id: products.map(item => identifier(item.item_id)),
+        product_name: products.map(item => optionalText(item.item_name) || ''),
+        product_price: products.map(item => numeric(item.price)),
+        product_quantity: products.map(item => numeric(item.quantity)),
+        product_group_id: products.map(item => identifier(item.item_group_id) || ''),
+        product_brand: products.map(item => optionalText(item.item_brand) || ''),
+        product_category: products.map(item => optionalText(item.item_category) || ''),
+        product_sku: products.map(item => optionalText(item.item_variant) || ''),
+    };
+}
+async function buildTealiumPayload(eventData, source, captureConsent, identityAtCapture) {
+    const name = eventMap[eventData.event];
+    const ecommerce = eventData.ecommerce;
+    const trusted = source.customData || {};
+    const payload = compact({
+        tealium_event: name,
+        event_id: identifier(source.id),
+        event_timestamp: optionalText(source.timestamp),
+        page_location: eventData.page_location,
+        page_referrer: eventData.page_referrer,
+        page_title: eventData.page_title,
+        ...Object.fromEntries(commonTextKeys.map(key => [key, optionalText(eventData[key] ?? trusted[key])])),
+        ...captureConsent,
+        ...(await trackingCookies()),
+    });
+    if (categoryGranted(captureConsent, TEALIUM_CONFIG.identityConsentCategory)) {
+        Object.assign(payload, identityAtCapture);
+        if (name === 'login' || name === 'sign_up') {
+            Object.assign(payload, compact({
+                user_id: identifier(trusted.user_id), customer_email_hash: await emailHash(trusted),
+                customer_logged_in: true, method: optionalText(trusted.method),
+            }));
+        } else if (name === 'purchase') {
+            const address = TEALIUM_CONFIG.includePurchaseAddress ? eventData.user_data?.address || {} : {};
+            Object.assign(payload, compact({
+                customer_email_hash: await emailHash(eventData),
+                ...Object.fromEntries(['first_name', 'last_name', 'street', 'city', 'region', 'postal_code', 'country']
+                    .map(key => ['customer_' + key, optionalText(address[key])])),
+            }));
+        }
+    } else if (name === 'login' || name === 'sign_up') {
+        payload.method = optionalText(trusted.method);
+    }
+    if (ecommerce) {
+        Object.assign(payload, productUdo(ecommerce.items), compact({
+            currency: optionalText(ecommerce.currency), value: numeric(ecommerce.value),
+            item_list_id: identifier(ecommerce.item_list_id), item_list_name: optionalText(ecommerce.item_list_name),
+            coupon: optionalText(ecommerce.coupon), shipping_tier: optionalText(ecommerce.shipping_tier),
+        }));
+    }
+    if (name === 'purchase') {
+        // A checkout token is not a stable order ID. Do not use the GA fallback.
+        Object.assign(payload, compact({
+            order_id: identifier(source.data?.checkout?.order?.id),
+            order_subtotal: numeric(eventData.total_value_without_tax_shipping),
+            order_total: numeric(eventData.total_value_with_tax_shipping),
+            order_tax_amount: numeric(ecommerce.tax), order_shipping_amount: numeric(ecommerce.shipping),
+            order_discount_amount: numeric(ecommerce.discount), order_promo_code: optionalText(ecommerce.coupon),
+            order_payment_type: optionalText(ecommerce.payment_type),
+        }));
+    }
+    return compact(payload);
+}
+function queueTealiumEvent(eventData, source) {
+    if (!pageEnabled || !eventMap[eventData.event] || !source?.id
+        || !velotricTealiumPageAllowed(eventData.page_location, TEALIUM_CONFIG)
+        || !Number.isFinite(Date.parse(source.timestamp)) || pendingTealiumBuilds >= TEALIUM_CONFIG.queueLimit) return;
+    const captureConsent = consentSnapshot();
+    if (!categoryGranted(captureConsent, TEALIUM_CONFIG.collectConsentCategory)) return;
+    const epoch = collectionEpoch;
+    const receivedAt = Date.now();
+    const capturedIdentityEpoch = identityEpoch;
+    const identityAtCapture = { ...knownIdentity };
+    const eventSnapshot = {
+        ...eventData,
+        ...(eventData.ecommerce ? { ecommerce: { ...eventData.ecommerce, items: eventData.ecommerce.items?.map(item => ({ ...item })) } } : {}),
+        ...(eventData.user_data ? { user_data: { address: { ...eventData.user_data.address } } } : {}),
+    };
+    const sourceSnapshot = {
+        id: source.id, timestamp: source.timestamp, customData: { ...source.customData },
+        data: { checkout: { order: { id: source.data?.checkout?.order?.id } } },
+    };
+    pendingTealiumBuilds += 1;
+    // Serialize asynchronous cookie/hash work to preserve the source event order.
+    tealiumBuildQueue = tealiumBuildQueue.then(async () => {
+        if (epoch !== collectionEpoch || Date.now() - receivedAt >= TEALIUM_CONFIG.readyTimeoutMs) return;
+        const identityForEvent = capturedIdentityEpoch === identityEpoch ? { ...identityAtCapture, ...knownIdentity } : {};
+        let timer;
+        let payload;
+        try {
+            payload = await Promise.race([
+                buildTealiumPayload(eventSnapshot, sourceSnapshot, captureConsent, identityForEvent),
+                new Promise((resolve, reject) => {
+                    timer = window.setTimeout(() => reject(new Error('Event preparation timed out')), TEALIUM_CONFIG.readyTimeoutMs - (Date.now() - receivedAt));
+                }),
+            ]);
+        } finally { window.clearTimeout(timer); }
+        if (epoch !== collectionEpoch || Date.now() - receivedAt >= TEALIUM_CONFIG.readyTimeoutMs) return;
+        if (capturedIdentityEpoch !== identityEpoch) stripIdentity(payload);
+        if ((payload.tealium_event === 'login' || payload.tealium_event === 'sign_up') && capturedIdentityEpoch === identityEpoch) {
+            knownIdentity = compact({ user_id: payload.user_id, customer_email_hash: payload.customer_email_hash, customer_logged_in: payload.customer_logged_in });
+        }
+        tealiumRuntime.enqueue(payload, captureConsent);
+    }).catch(() => { console.warn('[tealium] Event preparation failed.'); })
+        .finally(() => { pendingTealiumBuilds -= 1; });
+}
+
+function trackAuthentication(event) {
+    identityEpoch += 1;
+    knownIdentity = categoryGranted(consentSnapshot(), TEALIUM_CONFIG.identityConsentCategory)
+        ? compact({ user_id: identifier(event.customData?.user_id), customer_logged_in: true }) : {};
+    const context = event.context?.document;
+    queueTealiumEvent({ event: event.name, page_location: context?.location?.href,
+        page_referrer: context?.referrer, page_title: context?.title }, event);
+}
 
 /*==============================================================================
-  Event subscriptions
+  Event subscriptions: retain the original event-by-event layout
 ==============================================================================*/
-if (typeof analytics !== 'undefined') {
-    // ... (Non-ecommerce event subscriptions - page_view, clicks, search, form_submit - unchanged from previous full code) ...
+if (pageEnabled && typeof analytics !== 'undefined') {
+    analytics.subscribe('velotric:login', event => trackAuthentication(event));
+    analytics.subscribe('velotric:sign_up', event => trackAuthentication(event));
+    analytics.subscribe('velotric:logout', () => {
+        identityEpoch += 1;
+        knownIdentity = {};
+        tealiumRuntime.clearIdentity();
+    });
     if (config.conversionTracking.trackPageViews) {
         analytics.subscribe('page_viewed', (event) => {
             const eventContextData = event.context?.document;
-            window.dataLayer.push({
+            queueTealiumEvent({
                 event: 'cus_page_view',
                 page_location: eventContextData?.location?.href,
                 page_referrer: eventContextData?.referrer,
                 page_title: eventContextData?.title,
-            });
+            }, event);
         });
     }
-    if (config.conversionTracking.trackClicks) {
-        analytics.subscribe('custom_click', (event) => {
-            const eventContextData = event.context?.document;
-            pushEventToDataLayer({
-                event: 'custom_click_storefront',
-                page_location: eventContextData?.location?.href,
-                page_referrer: eventContextData?.referrer,
-                page_title: eventContextData?.title,
-                data: event.customData
-            });
-        });
-        analytics.subscribe('custom_link_click', (event) => {
-            const eventContextData = event.context?.document;
-            pushEventToDataLayer({
-                event: 'custom_click_link_storefront',
-                page_location: eventContextData?.location?.href,
-                page_referrer: eventContextData?.referrer,
-                page_title: eventContextData?.title,
-                data: event.customData
-            });
-        });
-        if (initContextData?.location?.href.includes('/checkouts/')) {
-            analytics.subscribe('clicked', (event) => {
-                const element = event.data?.element;
-                const eventContextData = event.context?.document;
-                pushEventToDataLayer({
-                    event: 'custom_click_checkout',
-                    page_location: eventContextData?.location?.href,
-                    page_referrer: eventContextData?.referrer,
-                    page_title: eventContextData?.title,
-                    data: {
-                        click_element: element?.tagName,
-                        click_id: element?.id || '',
-                        click_classes: element?.className || '',
-                        click_text: element?.textContent?.trim() || element?.value || '',
-                        click_target: element?.target || '',
-                        click_url: element?.href || ''
-                    }
-                });
-            });
-        }
-    }
-    if (config.conversionTracking.trackSearch) {
-        analytics.subscribe('search_submitted', (event) => {
-            const eventContextData = event.context?.document;
-            pushEventToDataLayer({
-                event: 'cus_view_search_results',
-                page_location: eventContextData?.location?.href,
-                page_referrer: eventContextData?.referrer,
-                page_title: eventContextData?.title,
-                search_term: event.data?.searchResult?.query
-            });
-        });
-    }
-    if (config.conversionTracking.trackFormSubmit) {
-        analytics.subscribe('form_submitted', (event) => {
-            const eventContextData = event.context?.document;
-            const decodedAction = decodeURIComponent(event.data?.element?.action || '');
-            if (!decodedAction.includes('/cart/add')) {
-                pushEventToDataLayer({
-                    event: 'form_submit',
-                    page_location: eventContextData?.location?.href,
-                    page_referrer: eventContextData?.referrer,
-                    page_title: eventContextData?.title,
-                    form_action: event.data?.element?.action,
-                    form_id: event.data?.element?.id
-                });
-            }
-        });
-    }
-
-
     const getOrderLevelCoupons = (discountApplications) => {
         let orderCoupons = new Set();
         if (Array.isArray(discountApplications)) {
@@ -470,7 +501,6 @@ if (typeof analytics !== 'undefined') {
         return Array.from(orderCoupons).join(',') || undefined;
     };
 
-    // ... (view_item_list, view_item, add_to_cart, view_cart, remove_from_cart - unchanged from previous full code, but ensure they use the corrected processCheckoutProducts if applicable for items structure) ...
     if (config.conversionTracking.trackViewItemList) {
         analytics.subscribe('collection_viewed', (event) => {
             const eventContextData = event.context?.document;
@@ -485,12 +515,13 @@ if (typeof analytics !== 'undefined') {
                 index: index + 1,
                 item_brand: item.product?.vendor,
                 item_category: item.product?.type,
+                item_variant: item.sku || item.title,
                 item_list_id: collection.id,
                 item_list_name: collection.title,
                 price: parseFloat(item.price?.amount || 0),
                 quantity: 1
             }));
-            pushEventToDataLayer({
+            queueTealiumEvent({
                 event: 'cus_view_item_list',
                 page_location: eventContextData?.location?.href,
                 page_referrer: eventContextData?.referrer,
@@ -500,7 +531,7 @@ if (typeof analytics !== 'undefined') {
                     item_list_name: collection.title,
                     items: googleAnalyticsProducts
                 }
-            });
+            }, event);
         });
     }
     if (config.conversionTracking.trackViewItem) {
@@ -519,7 +550,7 @@ if (typeof analytics !== 'undefined') {
                 price: parseFloat(productVariant.price?.amount || 0),
                 quantity: 1
             }];
-            pushEventToDataLayer({
+            queueTealiumEvent({
                 event: 'cus_view_item',
                 page_location: eventContextData?.location?.href,
                 page_referrer: eventContextData?.referrer,
@@ -530,7 +561,7 @@ if (typeof analytics !== 'undefined') {
                     value: parseFloat(productVariant.price?.amount || 0),
                     items: googleAnalyticsProducts
                 }
-            });
+            }, event);
         });
     }
     if (config.conversionTracking.trackAddToCart) {
@@ -552,7 +583,7 @@ if (typeof analytics !== 'undefined') {
                 price: itemPrice,
                 quantity: quantityAdded
             }];
-            pushEventToDataLayer({
+            queueTealiumEvent({
                 event: 'cus_add_to_cart',
                 page_location: eventContextData?.location?.href,
                 page_referrer: eventContextData?.referrer,
@@ -563,7 +594,7 @@ if (typeof analytics !== 'undefined') {
                     value: itemPrice * quantityAdded,
                     items: googleAnalyticsProducts
                 }
-            });
+            }, event);
         });
     }
     if (config.conversionTracking.trackViewCart) {
@@ -598,7 +629,7 @@ if (typeof analytics !== 'undefined') {
                     };
                 });
             const orderLevelCoupons = getOrderLevelCoupons(cart.discountApplications);
-            pushEventToDataLayer({
+            queueTealiumEvent({
                 event: 'cus_view_cart',
                 page_location: eventContextData?.location?.href,
                 page_referrer: eventContextData?.referrer,
@@ -610,7 +641,7 @@ if (typeof analytics !== 'undefined') {
                     coupon: orderLevelCoupons,
                     items: googleAnalyticsProducts
                 }
-            });
+            }, event);
         });
     }
     if (config.conversionTracking.trackRemoveFromCart) {
@@ -632,7 +663,7 @@ if (typeof analytics !== 'undefined') {
                 price: itemPrice,
                 quantity: quantityRemoved
             }];
-            pushEventToDataLayer({
+            queueTealiumEvent({
                 event: 'cus_remove_from_cart',
                 page_location: eventContextData?.location?.href,
                 page_referrer: eventContextData?.referrer,
@@ -643,7 +674,7 @@ if (typeof analytics !== 'undefined') {
                     value: itemPrice * quantityRemoved,
                     items: googleAnalyticsProducts
                 }
-            });
+            }, event);
         });
     }
 
@@ -653,7 +684,6 @@ if (typeof analytics !== 'undefined') {
     ==========================================================================*/
     if (config.conversionTracking.trackBeginCheckout) {
         analytics.subscribe('checkout_started', (event) => {
-            loadGTM();
 
             const eventContextData = event.context?.document;
             const checkout = event.data?.checkout; // Use checkout object directly for this event
@@ -661,13 +691,11 @@ if (typeof analytics !== 'undefined') {
                 console.warn('[pixel] begin_checkout: no checkout data found.');
                 return;
             }
-            sendStoreCookies(checkout.token, checkout.customer?.id || null);
-
             const processedData = processCheckoutProducts(checkout.lineItems);
             const orderLevelCoupons = getOrderLevelCoupons(checkout.discountApplications);
             const ga4EcommerceValue = parseFloat(checkout.subtotalPrice?.amount || 0);
 
-            pushEventToDataLayer({
+            queueTealiumEvent({
                 event: 'cus_begin_checkout',
                 page_location: eventContextData?.location?.href,
                 page_referrer: eventContextData?.referrer,
@@ -679,39 +707,9 @@ if (typeof analytics !== 'undefined') {
                     coupon: orderLevelCoupons,
                     items: processedData.items
                 }
-            });
+            }, event);
         });
     }
-
-    /*==========================================================================
-      Store cookies retry
-    ==========================================================================*/
-    // checkout_started is a single shot: if its request never leaves the page,
-    // the order can never be attributed. Every later checkout step carries the
-    // same checkout.token, so re-running the send there costs one short-circuit
-    // on the happy path and buys a retry when the first attempt was lost.
-    //
-    // Deliberately not gated behind the track* flags — this feeds order
-    // attribution, not GA4 reporting, and must survive those being turned off.
-    //
-    // TODO(#2): checkout.token may be null on checkout_completed, in which case
-    // that last entry has never fired and the retry is really only four steps.
-    [
-        'checkout_contact_info_submitted',
-        'checkout_address_info_submitted',
-        'checkout_shipping_info_submitted',
-        'payment_info_submitted',
-        'checkout_completed'
-    ].forEach((eventName) => {
-        analytics.subscribe(eventName, (event) => {
-            const checkout = event.data?.checkout;
-            if (checkout?.token) {
-                sendStoreCookies(checkout.token, checkout.customer?.id || null);
-            } else {
-                console.warn(`[pixel] ${eventName} carries no checkout.token — the store_cookies retry cannot run on this step.`);
-            }
-        });
-    });
 
     if (config.conversionTracking.trackAddShippingInfo) {
         analytics.subscribe('checkout_shipping_info_submitted', (event) => {
@@ -721,7 +719,7 @@ if (typeof analytics !== 'undefined') {
             const processedData = processCheckoutProducts(checkout.lineItems);
             const orderLevelCoupons = getOrderLevelCoupons(checkout.discountApplications);
             const ga4EcommerceValue = parseFloat(checkout.subtotalPrice?.amount || 0);
-            pushEventToDataLayer({
+            queueTealiumEvent({
                 event: 'cus_add_shipping_info',
                 page_location: eventContextData?.location?.href,
                 page_referrer: eventContextData?.referrer,
@@ -734,7 +732,7 @@ if (typeof analytics !== 'undefined') {
                     shipping_tier: checkout.shippingLine?.title || checkout.delivery?.selectedDeliveryOptions?.[0]?.title || undefined,
                     items: processedData.items
                 }
-            });
+            }, event);
         });
     }
 
@@ -746,7 +744,7 @@ if (typeof analytics !== 'undefined') {
             const processedData = processCheckoutProducts(checkout.lineItems);
             const orderLevelCoupons = getOrderLevelCoupons(checkout.discountApplications);
             const ga4EcommerceValue = parseFloat(checkout.subtotalPrice?.amount || 0);
-            pushEventToDataLayer({
+            queueTealiumEvent({
                 event: 'cus_add_payment_info',
                 page_location: eventContextData?.location?.href,
                 page_referrer: eventContextData?.referrer,
@@ -758,16 +756,12 @@ if (typeof analytics !== 'undefined') {
                     coupon: orderLevelCoupons,
                     items: processedData.items
                 }
-            });
+            }, event);
         });
     }
 
-    /*==========================================================================
-      Purchase
-    ==========================================================================*/
     if (config.conversionTracking.trackPurchase) {
         analytics.subscribe('checkout_completed', (event) => {
-            loadGTM();
             const eventContextData = event.context?.document;
             // For 'checkout_completed', event.data.checkout is the primary and most complete data source.
             const checkoutDataSource = event.data?.checkout;
@@ -809,27 +803,9 @@ if (typeof analytics !== 'undefined') {
             const ga4EcommerceValue = parseFloat(checkoutDataSource.subtotalPrice?.amount || 0);
             const totalOrderWideDiscountAmount = parseFloat(checkoutDataSource.discountsAmount?.amount || 0);
             const paymentGateway = checkoutDataSource.transactions?.[0]?.gateway || 'N/A';
-            // TODO(#1): only the middle term works. `Order` has no `name`
-            // field and checkout.token appears to be null here (#2), so a null
-            // `order` sends the purchase with no transaction id — no dedup key
-            // is written and the webhook replay counts the order twice.
-            const transactionId = orderDataSource?.name || orderDataSource?.id || checkoutDataSource.token;
-            if (!transactionId) {
-                console.warn('[pixel] purchase has no transaction_id — sGTM writes no dedup key, so the backfill will report this order a second time.');
-            }
-
-
-            const dataLayerObj = {
+            const purchaseData = {
                 event: 'cus_purchase',
-                // Same value and same field name as the store_cookies bridge:
-                // Shopify's checkout token, which the orders webhook exposes as
-                // `checkout_token`. Not the order's own `token`.
-                //
-                // Nothing consumes this today — the web container defines no
-                // data layer variable for it, so no tag forwards it. Kept for
-                // parity with the bridge; wiring it up needs a DLV plus a slot
-                // in the forwarding tag.
-                checkout_token: checkoutDataSource.token,
+
                 page_location: eventContextData?.location?.href,
                 page_referrer: eventContextData?.referrer,
                 page_title: eventContextData?.title,
@@ -852,7 +828,6 @@ if (typeof analytics !== 'undefined') {
                 total_value_with_tax_shipping: totalValueWithTaxShipping,
 
                 ecommerce: {
-                    transaction_id: transactionId,
                     affiliation: config.store.affiliationName,
                     currency: checkoutDataSource.currencyCode,
                     value: ga4EcommerceValue,
@@ -865,10 +840,8 @@ if (typeof analytics !== 'undefined') {
                     items: processedData.items
                 }
             };
-            pushEventToDataLayer(dataLayerObj);
+            queueTealiumEvent(purchaseData, event);
         });
     }
 
-} else {
-    console.error('[pixel] Shopify analytics object not found — no events will be tracked.');
 }

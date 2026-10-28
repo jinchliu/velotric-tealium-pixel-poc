@@ -1,3 +1,34 @@
+> This branch contains a **Tealium-only development POC**. The production store's original GTM Pixel remains a separate installation. Read [Velotric setup and validation](docs/clients/velotric.md).
+
+## Tealium Dev installation
+
+```sh
+npm ci
+node scripts/sync-tealium-theme.mjs
+npm test
+node scripts/build-dev-delivery.mjs https://tealium-5hvassg6.myshopify.com
+```
+
+Replace the test store's Custom Pixel with `dist/dev/web-pixel.js` and its old
+POC theme fragment with all of `dist/dev/theme-liquid.html`. Update both together:
+the minimal bridge uses protocol version 3. The Pixel keeps the original
+per-event callbacks and product/order calculations. The theme only loads the SDK,
+validates messages, and forwards permitted events; waiting and deduplication stay
+in the Pixel. Neither file loads GTM/Stape or writes to dataLayer.
+
+Both storefront and checkout use Shopify's real privacy API. Consentmo live
+integration is deferred and absent from these test files. Missing permission is
+not consent. The builder enables Tealium Dev only on the supplied separate Dev
+storefront and checks the Pixel's 64,000-character limit. Do not replace the
+production GTM Pixel or append another loader.
+
+## Legacy GTM reference
+
+The material below documents the original production integration. Its installation
+instructions and file descriptions are historical reference for that integration,
+not instructions for this branch's Tealium-only POC files.
+
+
 datalayer：Shopify → GA4 事件推送脚本，用于电商转化追踪。订阅店面与结账事件，
 转换成 GA4 风格的 payload 推送到 `dataLayer`，并在结账阶段把
 第一方 cookie 桥接到 Stape 服务端 GTM (sGTM)，供订单 webhook 事后回补归因。
