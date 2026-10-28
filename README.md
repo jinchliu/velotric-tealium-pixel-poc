@@ -6,10 +6,10 @@
 npm ci
 node scripts/sync-tealium-theme.mjs
 npm test
-node scripts/build-dev-delivery.mjs https://tealium-5hvassg6.myshopify.com
+npm run build:dev
 ```
 
-Replace the test store's Custom Pixel with `dist/dev/web-pixel.js` and its old
+Replace the test store's Custom Pixel with `dist/dev/web-pixel.min.js` and its old
 POC theme fragment with all of `dist/dev/theme-liquid.html`. Update both together:
 the minimal bridge uses protocol version 3. The Pixel keeps the original
 per-event callbacks and product/order calculations. The theme only loads the SDK,
@@ -18,9 +18,12 @@ in the Pixel. Neither file loads GTM/Stape or writes to dataLayer.
 
 Both storefront and checkout use Shopify's real privacy API. Consentmo live
 integration is deferred and absent from these test files. Missing permission is
-not consent. The builder enables Tealium Dev only on the supplied separate Dev
-storefront and checks the Pixel's 64,000-character limit. Do not replace the
-production GTM Pixel or append another loader.
+not consent. The builder enables `velotric-trial/main/dev` without a fixed
+storefront domain and checks both Pixel outputs against the 64,000-character
+limit. `dist/dev/web-pixel.js` is the readable four-space version of the same
+Pixel. Both files run on the HTTPS storefront where they are installed; the Dev
+SDK path does not isolate traffic by store. Do not replace the production GTM
+Pixel or append another loader.
 
 ## Legacy GTM reference
 

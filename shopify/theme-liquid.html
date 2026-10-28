@@ -7,13 +7,12 @@ const TEALIUM_CONFIG = {
     account: 'velotric-trial',
     profile: 'main',
     environment: 'dev',
-    storefrontOrigins: ['https://tealium-5hvassg6.myshopify.com'],
     collectConsentCategory: 'analytics',
     identityConsentCategory: 'marketing',
     pixelIframeSelector: 'iframe[id^="web-pixel-sandbox-CUSTOM-"]',
 };
 /* TEALIUM_CONFIG_END */
-if (!TEALIUM_CONFIG.enabled || !TEALIUM_CONFIG.storefrontOrigins.includes(window.location.origin)
+if (!TEALIUM_CONFIG.enabled || window.location.protocol !== 'https:'
     || window.__velotricTealiumBridgeInstalled) return;
 window.__velotricTealiumBridgeInstalled = true;
 let loading = false;

@@ -1,0 +1,12 @@
+{
+  "name": "velotric-pixel",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/tealium.test.mjs",
+    "build:dev": "node scripts/build-dev-delivery.mjs"
+  },
+  "devDependencies": {
+    "terser": "5.51.2"
+  }
+}

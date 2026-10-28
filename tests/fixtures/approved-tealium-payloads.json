@@ -1,0 +1,460 @@
+[
+  {
+    "method": "view",
+    "data": {
+      "tealium_event": "page_view",
+      "event_id": "page_viewed-id",
+      "event_timestamp": "2026-10-23T04:00:00.000Z",
+      "page_location": "https://www.velotricbike.com/checkouts/cn/test",
+      "page_referrer": "https://www.velotricbike.com/",
+      "page_title": "Merchant page",
+      "cmp_consent_analytics": "granted",
+      "cmp_consent_marketing": "granted",
+      "cmp_consent_personalization": "denied",
+      "cmp_consent_sale_of_data": "denied"
+    }
+  },
+  {
+    "method": "link",
+    "data": {
+      "tealium_event": "view_item_list",
+      "event_id": "collection_viewed-id",
+      "event_timestamp": "2026-10-23T04:00:00.000Z",
+      "page_location": "https://www.velotricbike.com/checkouts/cn/test",
+      "page_referrer": "https://www.velotricbike.com/",
+      "page_title": "Merchant page",
+      "cmp_consent_analytics": "granted",
+      "cmp_consent_marketing": "granted",
+      "cmp_consent_personalization": "denied",
+      "cmp_consent_sale_of_data": "denied",
+      "product_id": [
+        "shopify_US_p1_v1"
+      ],
+      "product_name": [
+        "Bike"
+      ],
+      "product_price": [
+        100
+      ],
+      "product_quantity": [
+        1
+      ],
+      "product_group_id": [
+        "p1"
+      ],
+      "product_brand": [
+        "Velotric"
+      ],
+      "product_category": [
+        "E-Bike"
+      ],
+      "product_sku": [
+        "SKU-1"
+      ],
+      "item_list_id": "list1",
+      "item_list_name": "Bikes"
+    }
+  },
+  {
+    "method": "link",
+    "data": {
+      "tealium_event": "sign_up",
+      "event_id": "velotric:sign_up-id",
+      "event_timestamp": "2026-10-23T04:00:00.000Z",
+      "page_location": "https://www.velotricbike.com/checkouts/cn/test",
+      "page_referrer": "https://www.velotricbike.com/",
+      "page_title": "Merchant page",
+      "cmp_consent_analytics": "granted",
+      "cmp_consent_marketing": "granted",
+      "cmp_consent_personalization": "denied",
+      "cmp_consent_sale_of_data": "denied",
+      "user_id": "existing-hashed-id",
+      "customer_logged_in": true,
+      "method": "email"
+    }
+  },
+  {
+    "method": "link",
+    "data": {
+      "tealium_event": "login",
+      "event_id": "velotric:login-id",
+      "event_timestamp": "2026-10-23T04:00:00.000Z",
+      "page_location": "https://www.velotricbike.com/checkouts/cn/test",
+      "page_referrer": "https://www.velotricbike.com/",
+      "page_title": "Merchant page",
+      "cmp_consent_analytics": "granted",
+      "cmp_consent_marketing": "granted",
+      "cmp_consent_personalization": "denied",
+      "cmp_consent_sale_of_data": "denied",
+      "user_id": "existing-hashed-id",
+      "customer_logged_in": true,
+      "method": "email"
+    }
+  },
+  {
+    "method": "link",
+    "data": {
+      "tealium_event": "view_item",
+      "event_id": "product_viewed-id",
+      "event_timestamp": "2026-10-23T04:00:00.000Z",
+      "page_location": "https://www.velotricbike.com/checkouts/cn/test",
+      "page_referrer": "https://www.velotricbike.com/",
+      "page_title": "Merchant page",
+      "cmp_consent_analytics": "granted",
+      "cmp_consent_marketing": "granted",
+      "cmp_consent_personalization": "denied",
+      "cmp_consent_sale_of_data": "denied",
+      "user_id": "existing-hashed-id",
+      "customer_logged_in": true,
+      "product_id": [
+        "shopify_US_p1_v1"
+      ],
+      "product_name": [
+        "Bike"
+      ],
+      "product_price": [
+        100
+      ],
+      "product_quantity": [
+        1
+      ],
+      "product_group_id": [
+        "p1"
+      ],
+      "product_brand": [
+        "Velotric"
+      ],
+      "product_category": [
+        "E-Bike"
+      ],
+      "product_sku": [
+        "SKU-1"
+      ],
+      "currency": "USD",
+      "value": 100
+    }
+  },
+  {
+    "method": "link",
+    "data": {
+      "tealium_event": "add_to_cart",
+      "event_id": "product_added_to_cart-id",
+      "event_timestamp": "2026-10-23T04:00:00.000Z",
+      "page_location": "https://www.velotricbike.com/checkouts/cn/test",
+      "page_referrer": "https://www.velotricbike.com/",
+      "page_title": "Merchant page",
+      "cmp_consent_analytics": "granted",
+      "cmp_consent_marketing": "granted",
+      "cmp_consent_personalization": "denied",
+      "cmp_consent_sale_of_data": "denied",
+      "user_id": "existing-hashed-id",
+      "customer_logged_in": true,
+      "product_id": [
+        "shopify_US_p1_v1"
+      ],
+      "product_name": [
+        "Bike"
+      ],
+      "product_price": [
+        100
+      ],
+      "product_quantity": [
+        2
+      ],
+      "product_group_id": [
+        "p1"
+      ],
+      "product_brand": [
+        "Velotric"
+      ],
+      "product_category": [
+        "E-Bike"
+      ],
+      "product_sku": [
+        "SKU-1"
+      ],
+      "currency": "USD",
+      "value": 200
+    }
+  },
+  {
+    "method": "link",
+    "data": {
+      "tealium_event": "remove_from_cart",
+      "event_id": "product_removed_from_cart-id",
+      "event_timestamp": "2026-10-23T04:00:00.000Z",
+      "page_location": "https://www.velotricbike.com/checkouts/cn/test",
+      "page_referrer": "https://www.velotricbike.com/",
+      "page_title": "Merchant page",
+      "cmp_consent_analytics": "granted",
+      "cmp_consent_marketing": "granted",
+      "cmp_consent_personalization": "denied",
+      "cmp_consent_sale_of_data": "denied",
+      "user_id": "existing-hashed-id",
+      "customer_logged_in": true,
+      "product_id": [
+        "shopify_US_p1_v1"
+      ],
+      "product_name": [
+        "Bike"
+      ],
+      "product_price": [
+        100
+      ],
+      "product_quantity": [
+        2
+      ],
+      "product_group_id": [
+        "p1"
+      ],
+      "product_brand": [
+        "Velotric"
+      ],
+      "product_category": [
+        "E-Bike"
+      ],
+      "product_sku": [
+        "SKU-1"
+      ],
+      "currency": "USD",
+      "value": 200
+    }
+  },
+  {
+    "method": "link",
+    "data": {
+      "tealium_event": "view_cart",
+      "event_id": "cart_viewed-id",
+      "event_timestamp": "2026-10-23T04:00:00.000Z",
+      "page_location": "https://www.velotricbike.com/checkouts/cn/test",
+      "page_referrer": "https://www.velotricbike.com/",
+      "page_title": "Merchant page",
+      "cmp_consent_analytics": "granted",
+      "cmp_consent_marketing": "granted",
+      "cmp_consent_personalization": "denied",
+      "cmp_consent_sale_of_data": "denied",
+      "user_id": "existing-hashed-id",
+      "customer_logged_in": true,
+      "product_id": [
+        "shopify_US_p1_v1"
+      ],
+      "product_name": [
+        "Bike"
+      ],
+      "product_price": [
+        90
+      ],
+      "product_quantity": [
+        2
+      ],
+      "product_group_id": [
+        "p1"
+      ],
+      "product_brand": [
+        "Velotric"
+      ],
+      "product_category": [
+        "E-Bike"
+      ],
+      "product_sku": [
+        "SKU-1"
+      ],
+      "currency": "USD",
+      "value": 180
+    }
+  },
+  {
+    "method": "link",
+    "data": {
+      "tealium_event": "begin_checkout",
+      "event_id": "checkout_started-id",
+      "event_timestamp": "2026-10-23T04:00:00.000Z",
+      "page_location": "https://www.velotricbike.com/checkouts/cn/test",
+      "page_referrer": "https://www.velotricbike.com/",
+      "page_title": "Merchant page",
+      "cmp_consent_analytics": "granted",
+      "cmp_consent_marketing": "granted",
+      "cmp_consent_personalization": "denied",
+      "cmp_consent_sale_of_data": "denied",
+      "user_id": "existing-hashed-id",
+      "customer_logged_in": true,
+      "product_id": [
+        "shopify_US_p1_v1"
+      ],
+      "product_name": [
+        "Bike"
+      ],
+      "product_price": [
+        90
+      ],
+      "product_quantity": [
+        2
+      ],
+      "product_group_id": [
+        "p1"
+      ],
+      "product_brand": [
+        "Velotric"
+      ],
+      "product_category": [
+        "E-Bike"
+      ],
+      "product_sku": [
+        "SKU-1"
+      ],
+      "currency": "USD",
+      "value": 180,
+      "coupon": "SAVE20"
+    }
+  },
+  {
+    "method": "link",
+    "data": {
+      "tealium_event": "add_shipping_info",
+      "event_id": "checkout_shipping_info_submitted-id",
+      "event_timestamp": "2026-10-23T04:00:00.000Z",
+      "page_location": "https://www.velotricbike.com/checkouts/cn/test",
+      "page_referrer": "https://www.velotricbike.com/",
+      "page_title": "Merchant page",
+      "cmp_consent_analytics": "granted",
+      "cmp_consent_marketing": "granted",
+      "cmp_consent_personalization": "denied",
+      "cmp_consent_sale_of_data": "denied",
+      "user_id": "existing-hashed-id",
+      "customer_logged_in": true,
+      "product_id": [
+        "shopify_US_p1_v1"
+      ],
+      "product_name": [
+        "Bike"
+      ],
+      "product_price": [
+        90
+      ],
+      "product_quantity": [
+        2
+      ],
+      "product_group_id": [
+        "p1"
+      ],
+      "product_brand": [
+        "Velotric"
+      ],
+      "product_category": [
+        "E-Bike"
+      ],
+      "product_sku": [
+        "SKU-1"
+      ],
+      "currency": "USD",
+      "value": 180,
+      "coupon": "SAVE20",
+      "shipping_tier": "Standard"
+    }
+  },
+  {
+    "method": "link",
+    "data": {
+      "tealium_event": "add_payment_info",
+      "event_id": "payment_info_submitted-id",
+      "event_timestamp": "2026-10-23T04:00:00.000Z",
+      "page_location": "https://www.velotricbike.com/checkouts/cn/test",
+      "page_referrer": "https://www.velotricbike.com/",
+      "page_title": "Merchant page",
+      "cmp_consent_analytics": "granted",
+      "cmp_consent_marketing": "granted",
+      "cmp_consent_personalization": "denied",
+      "cmp_consent_sale_of_data": "denied",
+      "user_id": "existing-hashed-id",
+      "customer_logged_in": true,
+      "product_id": [
+        "shopify_US_p1_v1"
+      ],
+      "product_name": [
+        "Bike"
+      ],
+      "product_price": [
+        90
+      ],
+      "product_quantity": [
+        2
+      ],
+      "product_group_id": [
+        "p1"
+      ],
+      "product_brand": [
+        "Velotric"
+      ],
+      "product_category": [
+        "E-Bike"
+      ],
+      "product_sku": [
+        "SKU-1"
+      ],
+      "currency": "USD",
+      "value": 180,
+      "coupon": "SAVE20"
+    }
+  },
+  {
+    "method": "link",
+    "data": {
+      "tealium_event": "purchase",
+      "event_id": "checkout_completed-id",
+      "event_timestamp": "2026-10-23T04:00:00.000Z",
+      "page_location": "https://www.velotricbike.com/checkouts/cn/test",
+      "page_referrer": "https://www.velotricbike.com/",
+      "page_title": "Merchant page",
+      "cmp_consent_analytics": "granted",
+      "cmp_consent_marketing": "granted",
+      "cmp_consent_personalization": "denied",
+      "cmp_consent_sale_of_data": "denied",
+      "user_id": "existing-hashed-id",
+      "customer_logged_in": true,
+      "customer_email_hash": "973dfe463ec85785f5f95af5ba3906eedb2d931c24e69824a89ea65dba4e813b",
+      "customer_first_name": "Test",
+      "customer_last_name": "Buyer",
+      "customer_street": "1 Test Road",
+      "customer_city": "Test City",
+      "customer_region": "CA",
+      "customer_postal_code": "00000",
+      "customer_country": "US",
+      "product_id": [
+        "shopify_US_p1_v1"
+      ],
+      "product_name": [
+        "Bike"
+      ],
+      "product_price": [
+        90
+      ],
+      "product_quantity": [
+        2
+      ],
+      "product_group_id": [
+        "p1"
+      ],
+      "product_brand": [
+        "Velotric"
+      ],
+      "product_category": [
+        "E-Bike"
+      ],
+      "product_sku": [
+        "SKU-1"
+      ],
+      "currency": "USD",
+      "value": 180,
+      "coupon": "SAVE20",
+      "shipping_tier": "Standard",
+      "order_id": "order-1",
+      "order_subtotal": 180,
+      "order_total": 208,
+      "order_tax_amount": 18,
+      "order_shipping_amount": 10,
+      "order_discount_amount": 20,
+      "order_promo_code": "SAVE20",
+      "order_payment_type": "shopify_payments"
+    }
+  }
+]

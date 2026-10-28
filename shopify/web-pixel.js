@@ -27,7 +27,6 @@ const TEALIUM_CONFIG = {
     account: 'velotric-trial',
     profile: 'main',
     environment: 'dev',
-    storefrontOrigins: ['https://tealium-5hvassg6.myshopify.com'],
     collectConsentCategory: 'analytics',
     identityConsentCategory: 'marketing',
     includePurchaseAddress: true,
@@ -118,7 +117,7 @@ function createVelotricTealiumRuntime(settings, transport = null) {
         }
     }
     function enqueue(payload, captureConsent) {
-        if (!configured() || failed || !velotricTealiumPageAllowed(payload?.page_location, settings)
+        if (!configured() || failed || !velotricTealiumPageAllowed(payload?.page_location)
             || !events.has(payload?.tealium_event)
             || !payload.event_id || !permitted(captureConsent) || !permitted(consent)) return false;
         if (payload.tealium_event === 'purchase' && !payload.order_id) return false;
@@ -147,14 +146,14 @@ function createVelotricTealiumRuntime(settings, transport = null) {
 }
 
 
-function velotricTealiumPageAllowed(pageLocation, settings) {
+function velotricTealiumPageAllowed(pageLocation) {
     try {
         const url = new URL(pageLocation);
-        return url.protocol === 'https:' && settings.storefrontOrigins.includes(url.origin);
+        return url.protocol === 'https:';
     } catch (error) { return false; }
 }
-function velotricTealiumUsesSandbox(pageLocation, settings) {
-    if (!velotricTealiumPageAllowed(pageLocation, settings)) return false;
+function velotricTealiumUsesSandbox(pageLocation) {
+    if (!velotricTealiumPageAllowed(pageLocation)) return false;
     const path = new URL(pageLocation).pathname;
     return /\/(?:checkouts?|thank_you|thank-you)(?:\/|$)/.test(path)
         || /^\/(?:\d+\/)?orders(?:\/|$)/.test(path);
@@ -257,8 +256,8 @@ const processCheckoutProducts = (lineItemsInput) => {
 };
 
 const initContextData = typeof init !== 'undefined' ? init.context?.document : null;
-const pageEnabled = TEALIUM_CONFIG.enabled && velotricTealiumPageAllowed(initContextData?.location?.href, TEALIUM_CONFIG);
-const checkoutContext = velotricTealiumUsesSandbox(initContextData?.location?.href, TEALIUM_CONFIG);
+const pageEnabled = TEALIUM_CONFIG.enabled && velotricTealiumPageAllowed(initContextData?.location?.href);
+const checkoutContext = velotricTealiumUsesSandbox(initContextData?.location?.href);
 const GA_SESSION_COOKIE_NAME = '_ga_' + config.conversionTracking.measurementId.replace(/^G-/, '');
 const categoryGranted = (state, category) => state['cmp_consent_' + category] === 'granted';
 const optionalText = value => typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -416,7 +415,7 @@ async function buildTealiumPayload(eventData, source, captureConsent, identityAt
 }
 function queueTealiumEvent(eventData, source) {
     if (!pageEnabled || !eventMap[eventData.event] || !source?.id
-        || !velotricTealiumPageAllowed(eventData.page_location, TEALIUM_CONFIG)
+        || !velotricTealiumPageAllowed(eventData.page_location)
         || !Number.isFinite(Date.parse(source.timestamp)) || pendingTealiumBuilds >= TEALIUM_CONFIG.queueLimit) return;
     const captureConsent = consentSnapshot();
     if (!categoryGranted(captureConsent, TEALIUM_CONFIG.collectConsentCategory)) return;

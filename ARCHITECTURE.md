@@ -12,7 +12,8 @@ Shopify events -> original per-event calculations -> Tealium UDO mapper
 Shopify privacy API -> Pixel state -> permission snapshot in each bridge message
 ```
 
-Only approved origins activate this POC. There are no dataLayer writes,
+This POC has no fixed storefront-domain allowlist. HTTPS and message-source
+checks remain in place. There are no dataLayer writes,
 GTM/Stape loaders, or store-cookie POSTs. The theme contains no copy of the Pixel
 runtime, queues, or timers. Consentmo live integration is deferred. Both files
 use bridge protocol version 3 and must be installed together.
